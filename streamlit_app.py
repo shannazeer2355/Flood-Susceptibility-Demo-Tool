@@ -2,7 +2,7 @@
 """
 streamlit_app.py
 =================
-Optional GUI dashboard for the Flood Risk Mapping Tool.
+Optional GUI dashboard for the Flood Susceptible Mapping Tool.
 
 Run with:
     streamlit run streamlit_app.py
