@@ -22,7 +22,7 @@ import streamlit.components.v1 as components
 from flood_tool.pipeline import run_pipeline
 
 st.set_page_config(page_title="Flood Risk Mapping Tool", layout="wide")
-st.title("🌊 Flood Risk Mapping Tool")
+st.title("🌊 Flood Susceptibility Demo Tool by Mohammed Shan")
 st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Risk Zones")
 
 with st.sidebar:
