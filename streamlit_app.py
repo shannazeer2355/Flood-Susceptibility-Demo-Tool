@@ -21,9 +21,9 @@ import streamlit.components.v1 as components
 
 from flood_tool.pipeline import run_pipeline
 
-st.set_page_config(page_title="Flood Risk Mapping Tool", layout="wide")
-st.title("🌊 Interactive Flood Susceptibility Assessment Demo Tool by Mohammed Shan")
-st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Risk Zones")
+st.set_page_config(page_title="Flood Susceptibility Tool", layout="wide")
+st.title("🌊 Interactive Flood Susceptibility Demo Tool by Mohammed Shan")
+st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Susceptible Zones")
 
 with st.sidebar:
     st.header("1. Upload Data")
@@ -39,10 +39,10 @@ with st.sidebar:
     st.caption(f"Weights auto-normalise to sum to 1.0 (currently {w_elev + w_slope + w_river:.2f})")
 
     st.header("3. River Buffer Zones")
-    river_near = st.number_input("High risk within (m)", value=500, step=50)
-    river_far = st.number_input("Low risk beyond (m)", value=1500, step=50)
+    river_near = st.number_input("High Susceptible within (m)", value=500, step=50)
+    river_far = st.number_input("Low Susceptible beyond (m)", value=1500, step=50)
 
-    run_btn = st.button("🚀 Generate Flood Risk Map", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Generate Flood Susceptible Map", type="primary", use_container_width=True)
 
 
 def _save_upload(upload, workdir):
@@ -80,7 +80,7 @@ if run_btn:
                     river_near_m=river_near, river_far_m=river_far,
                 )
 
-            st.success("Flood risk map generated!")
+            st.success("Flood Susceptible Map generated!")
 
             col1, col2 = st.columns([2, 1])
             with col1:
