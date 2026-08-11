@@ -27,7 +27,7 @@ from flood_tool.pipeline import run_pipeline
 
 st.set_page_config(page_title="Flood Susceptibility Demo Tool", layout="wide")
 st.title("🌊 Flood Susceptibility Demo Tool by Mohammed Shan")
-st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Risk Zones")
+st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Susceptibility Zones")
 
 if "use_demo" not in st.session_state:
     st.session_state.use_demo = False
@@ -143,10 +143,10 @@ with st.sidebar:
     st.caption(f"Weights auto-normalise to sum to 1.0 (currently {w_elev + w_slope + w_river:.2f})")
 
     st.header("3. River Buffer Zones")
-    river_near = st.number_input("High risk within (m)", value=500, step=50)
-    river_far = st.number_input("Low risk beyond (m)", value=1500, step=50)
+    river_near = st.number_input("High susceptibility within (m)", value=500, step=50)
+    river_far = st.number_input("Low susceptibility beyond (m)", value=1500, step=50)
 
-    run_btn = st.button("🚀 Generate Flood Risk Map", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Generate Flood Susceptibility Map", type="primary", use_container_width=True)
 
 
 def _save_upload(upload, workdir):
@@ -192,7 +192,7 @@ if run_btn:
                     river_near_m=river_near, river_far_m=river_far,
                 )
 
-            st.success("Flood risk map generated!")
+            st.success("Flood susceptibility map generated!")
 
             input_crs_desc = _describe_input_crs(aoi_path)
             working_crs_desc = _describe_crs(result["raster"])
@@ -211,10 +211,10 @@ if run_btn:
                     components.html(f.read(), height=550, scrolling=False)
 
             with col2:
-                st.subheader("Area by Risk Zone")
+                st.subheader("Area by Susceptibility Zone")
                 st.dataframe(result["area_stats"], use_container_width=True, hide_index=True)
                 if result["settlement_stats"] is not None:
-                    st.subheader("Settlements Affected")
+                    st.subheader("Settlements in Each Susceptibility Zone")
                     st.dataframe(result["settlement_stats"], use_container_width=True, hide_index=True)
 
             st.subheader("Static Map")
@@ -233,7 +233,7 @@ if run_btn:
                     col.download_button(label, f, file_name=os.path.basename(path))
 else:
     if st.session_state.use_demo:
-        st.info("Demo data is ready — click **Generate Flood Risk Map** in the sidebar to run it.")
+        st.info("Demo data is ready — click **Generate Flood Susceptibility Map** in the sidebar to run it.")
     else:
         st.info("Click **🧪 Try Demo Data** for an instant example, or upload your own AOI, DEM, and Rivers layers in the sidebar.")
     st.markdown("""
@@ -241,5 +241,5 @@ else:
     - **AOI**: district/study-area boundary polygon
     - **DEM**: elevation raster (SRTM 30m or ASTER), GeoTIFF
     - **Rivers**: water body/river lines or polygons (e.g. from OpenStreetMap)
-    - **Settlements** *(optional)*: village/settlement points, to count how many fall in each risk zone
+    - **Settlements** *(optional)*: village/settlement points, to count how many fall in each susceptibility zone
     """)
