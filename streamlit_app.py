@@ -29,8 +29,21 @@ st.set_page_config(page_title="Flood Susceptibility Demo Tool", layout="wide")
 st.title("🌊 Flood Susceptibility Demo Tool by Mohammed Shan")
 st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Susceptibility Zones")
 
-if "use_demo" not in st.session_state:
-    st.session_state.use_demo = False
+if "demo_region" not in st.session_state:
+    st.session_state.demo_region = None
+
+# Bundled real district datasets. Add more districts here as data becomes
+# available — each just needs an AOI, DEM, and rivers file checked into
+# the sample_data/ folder in the repo.
+REAL_DEMO_REGIONS = {
+    "Trivandrum, Kerala": {
+        "aoi": "sample_data/trivandrum/boundary.shp",
+        "dem": "sample_data/trivandrum/dem.tif",
+        "rivers": "sample_data/trivandrum/rivers.shp",
+        "settlements": None,
+    },
+}
+DEMO_OPTIONS = ["— Select a demo —", "Synthetic example (instant, no real data)"] + list(REAL_DEMO_REGIONS.keys())
 
 
 def generate_demo_data(workdir: str) -> dict:
@@ -121,16 +134,26 @@ def _describe_input_crs(aoi_path: str) -> str:
 
 with st.sidebar:
     st.header("Try it instantly")
-    if st.button("🧪 Try Demo Data", use_container_width=True):
-        st.session_state.use_demo = True
-    if st.session_state.use_demo:
-        st.success("Demo data selected — a synthetic district with a river valley.")
-        if st.button("Clear demo, upload my own instead", use_container_width=True):
-            st.session_state.use_demo = False
+    demo_choice = st.selectbox("Select a demo region", DEMO_OPTIONS, index=0)
+
+    if demo_choice == "— Select a demo —":
+        st.session_state.demo_region = None
+    elif demo_choice == "Synthetic example (instant, no real data)":
+        st.session_state.demo_region = "synthetic"
+        st.success("Synthetic demo selected — a fake district with a river valley.")
+    else:
+        region = REAL_DEMO_REGIONS[demo_choice]
+        missing = [k for k in ("aoi", "dem", "rivers") if region[k] and not os.path.exists(region[k])]
+        if missing:
+            st.error(f"Demo data for {demo_choice} isn't bundled with this app yet (missing: {', '.join(missing)}).")
+            st.session_state.demo_region = None
+        else:
+            st.session_state.demo_region = demo_choice
+            st.success(f"{demo_choice} selected — real SRTM elevation and OpenStreetMap rivers for this district.")
 
     st.divider()
     st.header("1. Upload Data")
-    disabled = st.session_state.use_demo
+    disabled = st.session_state.demo_region is not None
     aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"], disabled=disabled)
     dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"], disabled=disabled)
     rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"], disabled=disabled)
@@ -166,17 +189,23 @@ def _save_upload(upload, workdir):
 
 
 if run_btn:
-    if not st.session_state.use_demo and not (aoi_file and dem_file and rivers_file):
-        st.error("Please upload AOI, DEM, and Rivers layers, or click 'Try Demo Data' in the sidebar.")
+    if st.session_state.demo_region is None and not (aoi_file and dem_file and rivers_file):
+        st.error("Please upload AOI, DEM, and Rivers layers, or select a demo region in the sidebar.")
     else:
         with tempfile.TemporaryDirectory() as workdir:
-            if st.session_state.use_demo:
+            if st.session_state.demo_region == "synthetic":
                 with st.spinner("Generating synthetic demo dataset..."):
                     demo_paths = generate_demo_data(workdir)
                 aoi_path = demo_paths["aoi"]
                 dem_path = demo_paths["dem"]
                 rivers_path = demo_paths["rivers"]
                 settlements_path = demo_paths["settlements"]
+            elif st.session_state.demo_region in REAL_DEMO_REGIONS:
+                region = REAL_DEMO_REGIONS[st.session_state.demo_region]
+                aoi_path = region["aoi"]
+                dem_path = region["dem"]
+                rivers_path = region["rivers"]
+                settlements_path = region["settlements"]
             else:
                 aoi_path = _save_upload(aoi_file, workdir)
                 dem_path = _save_upload(dem_file, workdir)
@@ -232,10 +261,10 @@ if run_btn:
                 with open(path, "rb") as f:
                     col.download_button(label, f, file_name=os.path.basename(path))
 else:
-    if st.session_state.use_demo:
+    if st.session_state.demo_region is not None:
         st.info("Demo data is ready — click **Generate Flood Susceptibility Map** in the sidebar to run it.")
     else:
-        st.info("Click **🧪 Try Demo Data** for an instant example, or upload your own AOI, DEM, and Rivers layers in the sidebar.")
+        st.info("Select a demo region above for an instant example, or upload your own AOI, DEM, and Rivers layers in the sidebar.")
     st.markdown("""
     **Expected inputs**
     - **AOI**: district/study-area boundary polygon
