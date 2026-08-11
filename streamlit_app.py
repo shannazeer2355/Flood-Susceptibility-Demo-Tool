@@ -10,15 +10,14 @@ Run with:
 Lets the user upload AOI / DEM / rivers / settlements files, tune
 overlay weights with sliders, run the pipeline, and preview/download
 all outputs without touching the command line. Also includes a
-one-click "Try Demo Data" option that generates a synthetic dataset
-in-memory, so the app can be tried instantly with no files at all.
+one-click "Use sample data" option that loads a real, bundled
+district dataset, so the app can be tried instantly without any
+uploads.
 """
 import os
 import shutil
 import tempfile
 
-import numpy as np
-import pandas as pd
 import rasterio
 import streamlit as st
 import streamlit.components.v1 as components
@@ -28,9 +27,6 @@ from flood_tool.pipeline import run_pipeline
 st.set_page_config(page_title="Flood Susceptibility Demo Tool", layout="wide")
 st.title("🌊 Flood Susceptibility Demo Tool by Mohammed Shan")
 st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Susceptibility Zones")
-
-if "demo_region" not in st.session_state:
-    st.session_state.demo_region = None
 
 # Bundled real district datasets. Add more districts here as data becomes
 # available — each just needs an AOI, DEM, and rivers file checked into
@@ -43,63 +39,6 @@ REAL_DEMO_REGIONS = {
         "settlements": None,
     },
 }
-DEMO_OPTIONS = ["— Select a demo —", "Synthetic example (instant, no real data)"] + list(REAL_DEMO_REGIONS.keys())
-
-
-def generate_demo_data(workdir: str) -> dict:
-    """
-    Build a small synthetic AOI + DEM + rivers + villages dataset so the
-    app can be tried instantly with no uploads. Mirrors the logic in
-    sample_data/make_sample_data.py.
-    """
-    import geopandas as gpd
-    import rasterio
-    from rasterio.transform import from_origin
-    from shapely.geometry import Polygon, LineString, Point
-
-    crs = "EPSG:32643"
-    minx, miny, maxx, maxy = 0, 0, 5000, 4000
-
-    aoi = gpd.GeoDataFrame(
-        {"name": ["Demo District"]},
-        geometry=[Polygon([(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)])],
-        crs=crs,
-    )
-    aoi_path = os.path.join(workdir, "boundary.shp")
-    aoi.to_file(aoi_path)
-
-    res = 30
-    width = int((maxx - minx) / res)
-    height = int((maxy - miny) / res)
-    xs = np.linspace(0, maxx, width)
-    ys = np.linspace(maxy, 0, height)
-    X, Y = np.meshgrid(xs, ys)
-
-    valley_dist = np.abs((Y - (0.6 * X + 800))) / np.sqrt(1 + 0.6 ** 2)
-    elevation = 20 + 0.02 * valley_dist ** 1.3
-    elevation += np.random.default_rng(42).normal(0, 1.5, size=elevation.shape)
-    elevation = elevation.astype("float32")
-
-    transform = from_origin(minx, maxy, res, res)
-    dem_path = os.path.join(workdir, "dem.tif")
-    with rasterio.open(
-        dem_path, "w", driver="GTiff", height=height, width=width, count=1,
-        dtype="float32", crs=crs, transform=transform, nodata=-9999,
-    ) as dst:
-        dst.write(elevation, 1)
-
-    river_line = LineString([(x, 0.6 * x + 800) for x in np.linspace(minx, maxx, 50)])
-    rivers = gpd.GeoDataFrame({"name": ["Demo River"]}, geometry=[river_line], crs=crs)
-    rivers_path = os.path.join(workdir, "rivers.shp")
-    rivers.to_file(rivers_path)
-
-    rng = np.random.default_rng(7)
-    village_pts = [Point(rng.uniform(200, maxx - 200), rng.uniform(200, maxy - 200)) for _ in range(15)]
-    villages = gpd.GeoDataFrame({"name": [f"Village_{i+1}" for i in range(15)]}, geometry=village_pts, crs=crs)
-    villages_path = os.path.join(workdir, "villages.shp")
-    villages.to_file(villages_path)
-
-    return {"aoi": aoi_path, "dem": dem_path, "rivers": rivers_path, "settlements": villages_path}
 
 
 def _describe_crs(raster_path: str) -> str:
@@ -133,31 +72,34 @@ def _describe_input_crs(aoi_path: str) -> str:
 
 
 with st.sidebar:
-    st.header("Try it instantly")
-    demo_choice = st.selectbox("Select a demo region", DEMO_OPTIONS, index=0)
+    st.header("1. Data Source")
 
-    if demo_choice == "— Select a demo —":
-        st.session_state.demo_region = None
-    elif demo_choice == "Synthetic example (instant, no real data)":
-        st.session_state.demo_region = "synthetic"
-        st.success("Synthetic demo selected — a fake district with a river valley.")
-    else:
-        region = REAL_DEMO_REGIONS[demo_choice]
+    data_mode = st.radio(
+        "How do you want to provide data?",
+        options=["Use my own data", "Use sample data (Trivandrum, Kerala)"],
+        index=0,
+    )
+    use_sample_data = data_mode.startswith("Use sample")
+
+    aoi_file = dem_file = rivers_file = settlements_file = None
+    sample_region_ready = False
+
+    if use_sample_data:
+        region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
         missing = [k for k in ("aoi", "dem", "rivers") if region[k] and not os.path.exists(region[k])]
         if missing:
-            st.error(f"Demo data for {demo_choice} isn't bundled with this app yet (missing: {', '.join(missing)}).")
-            st.session_state.demo_region = None
+            st.error(
+                f"Sample data isn't bundled with this app yet (missing: {', '.join(missing)})."
+            )
         else:
-            st.session_state.demo_region = demo_choice
-            st.success(f"{demo_choice} selected — real SRTM elevation and OpenStreetMap rivers for this district.")
-
-    st.divider()
-    st.header("1. Upload Data")
-    disabled = st.session_state.demo_region is not None
-    aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"], disabled=disabled)
-    dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"], disabled=disabled)
-    rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"], disabled=disabled)
-    settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"], disabled=disabled)
+            sample_region_ready = True
+            st.success("Real SRTM elevation and OpenStreetMap rivers for Trivandrum, Kerala will be used.")
+    else:
+        st.caption("Upload your own AOI, DEM, and river layers below.")
+        aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"])
+        dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"])
+        rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"])
+        settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"])
 
     st.header("2. Overlay Weights")
     w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.4, 0.05)
@@ -189,19 +131,14 @@ def _save_upload(upload, workdir):
 
 
 if run_btn:
-    if st.session_state.demo_region is None and not (aoi_file and dem_file and rivers_file):
-        st.error("Please upload AOI, DEM, and Rivers layers, or select a demo region in the sidebar.")
+    if use_sample_data and not sample_region_ready:
+        st.error("Sample data isn't available. Please switch to 'Use my own data' and upload your files.")
+    elif not use_sample_data and not (aoi_file and dem_file and rivers_file):
+        st.error("Please upload AOI, DEM, and Rivers layers.")
     else:
         with tempfile.TemporaryDirectory() as workdir:
-            if st.session_state.demo_region == "synthetic":
-                with st.spinner("Generating synthetic demo dataset..."):
-                    demo_paths = generate_demo_data(workdir)
-                aoi_path = demo_paths["aoi"]
-                dem_path = demo_paths["dem"]
-                rivers_path = demo_paths["rivers"]
-                settlements_path = demo_paths["settlements"]
-            elif st.session_state.demo_region in REAL_DEMO_REGIONS:
-                region = REAL_DEMO_REGIONS[st.session_state.demo_region]
+            if use_sample_data:
+                region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
                 aoi_path = region["aoi"]
                 dem_path = region["dem"]
                 rivers_path = region["rivers"]
@@ -261,10 +198,10 @@ if run_btn:
                 with open(path, "rb") as f:
                     col.download_button(label, f, file_name=os.path.basename(path))
 else:
-    if st.session_state.demo_region is not None:
-        st.info("Demo data is ready — click **Generate Flood Susceptibility Map** in the sidebar to run it.")
+    if use_sample_data and sample_region_ready:
+        st.info("Sample data is ready — click **Generate Flood Susceptibility Map** in the sidebar to run it.")
     else:
-        st.info("Select a demo region above for an instant example, or upload your own AOI, DEM, and Rivers layers in the sidebar.")
+        st.info("Upload your own AOI, DEM, and Rivers layers in the sidebar, or switch to sample data for an instant example.")
     st.markdown("""
     **Expected inputs**
     - **AOI**: district/study-area boundary polygon
