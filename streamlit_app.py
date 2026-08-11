@@ -2,35 +2,139 @@
 """
 streamlit_app.py
 =================
-Optional GUI dashboard for the Flood Susceptible Mapping Tool.
+GUI dashboard for the Flood Susceptibility Demo Tool.
 
 Run with:
     streamlit run streamlit_app.py
 
 Lets the user upload AOI / DEM / rivers / settlements files, tune
 overlay weights with sliders, run the pipeline, and preview/download
-all outputs without touching the command line.
+all outputs without touching the command line. Also includes a
+one-click "Try Demo Data" option that generates a synthetic dataset
+in-memory, so the app can be tried instantly with no files at all.
 """
 import os
 import shutil
 import tempfile
 
+import numpy as np
 import pandas as pd
+import rasterio
 import streamlit as st
 import streamlit.components.v1 as components
 
 from flood_tool.pipeline import run_pipeline
 
-st.set_page_config(page_title="Flood Susceptibility Tool", layout="wide")
-st.title("🌊 Interactive Flood Susceptibility Demo Tool by Mohammed Shan")
-st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Susceptible Zones")
+st.set_page_config(page_title="Flood Susceptibility Demo Tool", layout="wide")
+st.title("🌊 Flood Susceptibility Demo Tool by Mohammed Shan")
+st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Risk Zones")
+
+if "use_demo" not in st.session_state:
+    st.session_state.use_demo = False
+
+
+def generate_demo_data(workdir: str) -> dict:
+    """
+    Build a small synthetic AOI + DEM + rivers + villages dataset so the
+    app can be tried instantly with no uploads. Mirrors the logic in
+    sample_data/make_sample_data.py.
+    """
+    import geopandas as gpd
+    import rasterio
+    from rasterio.transform import from_origin
+    from shapely.geometry import Polygon, LineString, Point
+
+    crs = "EPSG:32643"
+    minx, miny, maxx, maxy = 0, 0, 5000, 4000
+
+    aoi = gpd.GeoDataFrame(
+        {"name": ["Demo District"]},
+        geometry=[Polygon([(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)])],
+        crs=crs,
+    )
+    aoi_path = os.path.join(workdir, "boundary.shp")
+    aoi.to_file(aoi_path)
+
+    res = 30
+    width = int((maxx - minx) / res)
+    height = int((maxy - miny) / res)
+    xs = np.linspace(0, maxx, width)
+    ys = np.linspace(maxy, 0, height)
+    X, Y = np.meshgrid(xs, ys)
+
+    valley_dist = np.abs((Y - (0.6 * X + 800))) / np.sqrt(1 + 0.6 ** 2)
+    elevation = 20 + 0.02 * valley_dist ** 1.3
+    elevation += np.random.default_rng(42).normal(0, 1.5, size=elevation.shape)
+    elevation = elevation.astype("float32")
+
+    transform = from_origin(minx, maxy, res, res)
+    dem_path = os.path.join(workdir, "dem.tif")
+    with rasterio.open(
+        dem_path, "w", driver="GTiff", height=height, width=width, count=1,
+        dtype="float32", crs=crs, transform=transform, nodata=-9999,
+    ) as dst:
+        dst.write(elevation, 1)
+
+    river_line = LineString([(x, 0.6 * x + 800) for x in np.linspace(minx, maxx, 50)])
+    rivers = gpd.GeoDataFrame({"name": ["Demo River"]}, geometry=[river_line], crs=crs)
+    rivers_path = os.path.join(workdir, "rivers.shp")
+    rivers.to_file(rivers_path)
+
+    rng = np.random.default_rng(7)
+    village_pts = [Point(rng.uniform(200, maxx - 200), rng.uniform(200, maxy - 200)) for _ in range(15)]
+    villages = gpd.GeoDataFrame({"name": [f"Village_{i+1}" for i in range(15)]}, geometry=village_pts, crs=crs)
+    villages_path = os.path.join(workdir, "villages.shp")
+    villages.to_file(villages_path)
+
+    return {"aoi": aoi_path, "dem": dem_path, "rivers": rivers_path, "settlements": villages_path}
+
+
+def _describe_crs(raster_path: str) -> str:
+    """Return a short human-readable CRS description for the processed raster."""
+    try:
+        with rasterio.open(raster_path) as src:
+            crs = src.crs
+            if crs is None:
+                return "Unknown"
+            epsg = crs.to_epsg()
+            name = crs.to_string()
+            if epsg:
+                return f"EPSG:{epsg} — {name}"
+            return name
+    except Exception:
+        return "Unavailable"
+
+
+def _describe_input_crs(aoi_path: str) -> str:
+    """Return a short human-readable CRS description for the original, unmodified AOI upload."""
+    try:
+        import geopandas as gpd
+        gdf = gpd.read_file(aoi_path)
+        crs = gdf.crs
+        if crs is None:
+            return "Unspecified in file"
+        epsg = crs.to_epsg()
+        return f"EPSG:{epsg}" if epsg else crs.to_string()
+    except Exception:
+        return "Unavailable"
+
 
 with st.sidebar:
+    st.header("Try it instantly")
+    if st.button("🧪 Try Demo Data", use_container_width=True):
+        st.session_state.use_demo = True
+    if st.session_state.use_demo:
+        st.success("Demo data selected — a synthetic district with a river valley.")
+        if st.button("Clear demo, upload my own instead", use_container_width=True):
+            st.session_state.use_demo = False
+
+    st.divider()
     st.header("1. Upload Data")
-    aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"])
-    dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"])
-    rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"])
-    settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"])
+    disabled = st.session_state.use_demo
+    aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"], disabled=disabled)
+    dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"], disabled=disabled)
+    rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"], disabled=disabled)
+    settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"], disabled=disabled)
 
     st.header("2. Overlay Weights")
     w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.4, 0.05)
@@ -39,10 +143,10 @@ with st.sidebar:
     st.caption(f"Weights auto-normalise to sum to 1.0 (currently {w_elev + w_slope + w_river:.2f})")
 
     st.header("3. River Buffer Zones")
-    river_near = st.number_input("High Susceptible within (m)", value=500, step=50)
-    river_far = st.number_input("Low Susceptible beyond (m)", value=1500, step=50)
+    river_near = st.number_input("High risk within (m)", value=500, step=50)
+    river_far = st.number_input("Low risk beyond (m)", value=1500, step=50)
 
-    run_btn = st.button("🚀 Generate Flood Susceptible Map", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Generate Flood Risk Map", type="primary", use_container_width=True)
 
 
 def _save_upload(upload, workdir):
@@ -62,14 +166,22 @@ def _save_upload(upload, workdir):
 
 
 if run_btn:
-    if not (aoi_file and dem_file and rivers_file):
-        st.error("Please upload AOI, DEM, and Rivers layers before running.")
+    if not st.session_state.use_demo and not (aoi_file and dem_file and rivers_file):
+        st.error("Please upload AOI, DEM, and Rivers layers, or click 'Try Demo Data' in the sidebar.")
     else:
         with tempfile.TemporaryDirectory() as workdir:
-            aoi_path = _save_upload(aoi_file, workdir)
-            dem_path = _save_upload(dem_file, workdir)
-            rivers_path = _save_upload(rivers_file, workdir)
-            settlements_path = _save_upload(settlements_file, workdir)
+            if st.session_state.use_demo:
+                with st.spinner("Generating synthetic demo dataset..."):
+                    demo_paths = generate_demo_data(workdir)
+                aoi_path = demo_paths["aoi"]
+                dem_path = demo_paths["dem"]
+                rivers_path = demo_paths["rivers"]
+                settlements_path = demo_paths["settlements"]
+            else:
+                aoi_path = _save_upload(aoi_file, workdir)
+                dem_path = _save_upload(dem_file, workdir)
+                rivers_path = _save_upload(rivers_file, workdir)
+                settlements_path = _save_upload(settlements_file, workdir)
 
             out_dir = os.path.join(workdir, "outputs")
             with st.spinner("Running pipeline: clipping DEM, computing slope, river distance, overlay..."):
@@ -80,7 +192,17 @@ if run_btn:
                     river_near_m=river_near, river_far_m=river_far,
                 )
 
-            st.success("Flood Susceptible Map generated!")
+            st.success("Flood risk map generated!")
+
+            input_crs_desc = _describe_input_crs(aoi_path)
+            working_crs_desc = _describe_crs(result["raster"])
+            st.caption(
+                f"📐 **Projection:** your AOI was supplied in **{input_crs_desc}** and was "
+                f"automatically reprojected to **{working_crs_desc}** for analysis — the correct "
+                "local, metre-based coordinate system for this region, auto-detected from your data's "
+                "location. This works the same way for data from anywhere in the world, so distances "
+                "and areas are always measured accurately regardless of what projection you upload in."
+            )
 
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -110,7 +232,10 @@ if run_btn:
                 with open(path, "rb") as f:
                     col.download_button(label, f, file_name=os.path.basename(path))
 else:
-    st.info("Upload your AOI, DEM, and Rivers layers in the sidebar, then click **Generate Flood Risk Map**.")
+    if st.session_state.use_demo:
+        st.info("Demo data is ready — click **Generate Flood Risk Map** in the sidebar to run it.")
+    else:
+        st.info("Click **🧪 Try Demo Data** for an instant example, or upload your own AOI, DEM, and Rivers layers in the sidebar.")
     st.markdown("""
     **Expected inputs**
     - **AOI**: district/study-area boundary polygon
