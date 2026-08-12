@@ -43,7 +43,7 @@ CONTACT_EMAIL = "shangeography@gmail.com"
 # (e.g. all of Kerala at 30m) can exceed available RAM once loaded, clipped,
 # and used for slope/distance calculations — causing a crash. District- or
 # taluk-sized AOIs work reliably; recommend users stay under this size.
-DEM_SIZE_WARNING_MB = 40
+DEM_SIZE_WARNING_MB = 25
 
 
 def _describe_crs(raster_path: str) -> str:
@@ -137,10 +137,11 @@ with st.sidebar:
         if dem_size_mb > DEM_SIZE_WARNING_MB:
             st.warning(
                 f"⚠️ This DEM is {dem_size_mb:.1f}MB — larger than the "
-                f"{DEM_SIZE_WARNING_MB}MB guideline. Large, state-wide rasters "
-                "often crash this app due to memory limits. Consider clipping "
-                "to a smaller area (a single district or taluk) before "
-                "uploading, or the app may fail when you click Generate."
+                f"{DEM_SIZE_WARNING_MB}MB guideline. You can still try generating "
+                "the map, but this app runs on a free hosting tier with limited "
+                "memory — if the processed output exceeds that limit, the app "
+                "will crash partway through. For a reliable run, clip your DEM "
+                "to a smaller area (a single district or taluk) before uploading."
             )
         else:
             st.caption(f"DEM size: {dem_size_mb:.1f}MB ✓")
