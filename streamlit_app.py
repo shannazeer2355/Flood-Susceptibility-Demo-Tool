@@ -34,6 +34,13 @@ REAL_DEMO_REGIONS = {
         "settlements": None,
         "rainfall": "sample_data/trivandrum/rainfall.tif",  # optional; used if present
     },
+    "Ernakulam, Kerala": {
+        "aoi": "sample_data/ernakulam/boundary.geojson",
+        "dem": "sample_data/ernakulam/dem.tif",
+        "rivers": "sample_data/ernakulam/rivers.geojson",
+        "settlements": None,
+        "rainfall": "sample_data/ernakulam/rainfall.tif",
+    },
 }
 
 # --- Contact details shown in the sidebar footer -----------------------------
@@ -101,19 +108,27 @@ with st.sidebar:
     st.header("1. Choose your data source")
     data_source = st.radio(
         "Data source",
-        ["Use my own data", "Use sample data (Trivandrum, Kerala)"],
+        ["Use my own data", "Use sample data"],
         label_visibility="collapsed",
     )
-    using_sample = data_source == "Use sample data (Trivandrum, Kerala)"
+    using_sample = data_source == "Use sample data"
 
+    selected_region_name = None
+    region = None
     if using_sample:
-        region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
-        missing = [k for k in ("aoi", "dem", "rivers") if not os.path.exists(region[k])]
-        if missing:
-            st.error(f"Sample data isn't fully bundled with this app yet (missing: {', '.join(missing)}).")
+        available_regions = {
+            name: cfg for name, cfg in REAL_DEMO_REGIONS.items()
+            if all(os.path.exists(cfg[k]) for k in ("aoi", "dem", "rivers"))
+        }
+        if not available_regions:
+            st.error("No sample regions are fully bundled with this app yet.")
             using_sample = False
         else:
-            st.success("Trivandrum, Kerala selected — real SRTM elevation and OpenStreetMap water body data.")
+            selected_region_name = st.selectbox(
+                "Sample region", list(available_regions.keys()),
+            )
+            region = available_regions[selected_region_name]
+            st.success(f"{selected_region_name} selected — real SRTM elevation and OpenStreetMap water body data.")
             if region.get("rainfall") and os.path.exists(region["rainfall"]):
                 st.caption("✓ Rainfall climatology also available for this region.")
 
@@ -156,7 +171,7 @@ with st.sidebar:
     )
 
     st.header("3. Overlay Weights")
-    rainfall_available_in_sample = bool(using_sample and REAL_DEMO_REGIONS["Trivandrum, Kerala"].get("rainfall") and os.path.exists(REAL_DEMO_REGIONS["Trivandrum, Kerala"]["rainfall"]))
+    rainfall_available_in_sample = bool(using_sample and region and region.get("rainfall") and os.path.exists(region["rainfall"]))
     include_rainfall = rainfall_available_in_sample or (rainfall_file is not None)
     if include_rainfall:
         w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.3, 0.05)
@@ -191,7 +206,6 @@ if run_btn:
         try:
             with tempfile.TemporaryDirectory() as workdir:
                 if using_sample:
-                    region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
                     aoi_path = region["aoi"]
                     dem_path = region["dem"]
                     rivers_path = region["rivers"]
@@ -271,7 +285,7 @@ if run_btn:
                 "memory limit (see the size guidance next to the DEM upload field)."
             )
 else:
-    st.info("Choose **Use my own data** or **Use sample data (Trivandrum, Kerala)** in the sidebar to get started.")
+    st.info("Choose **Use my own data** or **Use sample data** in the sidebar to get started.")
     st.markdown(f"""
     **Expected inputs**
     - **AOI**: district/study-area boundary polygon
