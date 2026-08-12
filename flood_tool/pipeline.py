@@ -58,8 +58,24 @@ def run_pipeline(
     step = 5
     if rainfall_path:
         logger.info("Step %d/%d: Resampling rainfall and scoring rainfall risk...", step, total_steps)
-        rainfall_arr = io_utils.resample_raster_to_grid(rainfall_path, grid)
+        # 'nearest' instead of the default 'bilinear': bilinear requires all
+        # 4 surrounding source pixels to be valid, so a single nodata
+        # neighbour near the source raster's coverage edge produces a
+        # nodata destination pixel even when nearby real data exists.
+        # 'nearest' uses only the closest source pixel, recovering those
+        # edge cells without inventing any new information.
+        from rasterio.warp import Resampling
+        rainfall_arr = io_utils.resample_raster_to_grid(rainfall_path, grid, resampling=Resampling.nearest)
         rainfall_mask = mask & (rainfall_arr != grid.nodata)
+
+        n_gaps = int((mask & (rainfall_arr == grid.nodata)).sum())
+        if n_gaps:
+            logger.info(
+                "%d pixel(s) inside the AOI have no rainfall data; those "
+                "pixels will use the elevation/slope/river score instead.",
+                n_gaps,
+            )
+
         rainfall_risk = rainfall_mod.rainfall_risk_score(rainfall_arr, rainfall_mask)
         step += 1
 
