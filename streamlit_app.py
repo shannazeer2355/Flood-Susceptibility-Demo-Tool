@@ -35,6 +35,10 @@ REAL_DEMO_REGIONS = {
     },
 }
 
+# --- Contact details shown in the sidebar footer -----------------------------
+# Fill this in with your real Gmail address.
+CONTACT_EMAIL = "shangeography@gmail.com"
+
 
 def _describe_crs(raster_path: str) -> str:
     """Return a short human-readable CRS description for the processed raster."""
@@ -135,6 +139,11 @@ with st.sidebar:
     river_far = st.number_input("Low susceptibility beyond (m)", value=1500, step=50)
 
     run_btn = st.button("🚀 Generate Flood Susceptibility Map", type="primary", use_container_width=True)
+
+    st.divider()
+    st.markdown("### 📩 Questions or Issues?")
+    st.markdown(f"**Email:** [{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL})")
+    st.caption("Built by Mohammed Shan")
 
 
 if run_btn:
