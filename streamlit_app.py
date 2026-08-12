@@ -39,6 +39,12 @@ REAL_DEMO_REGIONS = {
 # --- Contact details shown in the sidebar footer -----------------------------
 CONTACT_EMAIL = "shangeography@gmail.com"
 
+# This app runs on a free hosting tier with limited memory. A state-wide DEM
+# (e.g. all of Kerala at 30m) can exceed available RAM once loaded, clipped,
+# and used for slope/distance calculations — causing a crash. District- or
+# taluk-sized AOIs work reliably; recommend users stay under this size.
+DEM_SIZE_WARNING_MB = 40
+
 
 def _describe_crs(raster_path: str) -> str:
     """Return a short human-readable CRS description for the processed raster."""
@@ -115,7 +121,30 @@ with st.sidebar:
     st.header("2. Upload Data")
     disabled = using_sample
     aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"], disabled=disabled)
-    dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"], disabled=disabled)
+    dem_file = st.file_uploader(
+        "DEM raster (.tif)", type=["tif", "tiff"], disabled=disabled,
+        help=(
+            f"Keep this under ~{DEM_SIZE_WARNING_MB}MB. This app runs on limited "
+            "memory, and a state-wide DEM (e.g. all of Kerala) can crash the app "
+            "when it's clipped and processed. Use a district/taluk-sized AOI "
+            "instead — clip your DEM to that extent in QGIS ('Raster \u2192 "
+            "Extraction \u2192 Clip Raster by Mask Layer') or in Earth Engine before "
+            "exporting, using a smaller boundary than the full state."
+        ),
+    )
+    if dem_file is not None:
+        dem_size_mb = dem_file.size / (1024 * 1024)
+        if dem_size_mb > DEM_SIZE_WARNING_MB:
+            st.warning(
+                f"⚠️ This DEM is {dem_size_mb:.1f}MB — larger than the "
+                f"{DEM_SIZE_WARNING_MB}MB guideline. Large, state-wide rasters "
+                "often crash this app due to memory limits. Consider clipping "
+                "to a smaller area (a single district or taluk) before "
+                "uploading, or the app may fail when you click Generate."
+            )
+        else:
+            st.caption(f"DEM size: {dem_size_mb:.1f}MB ✓")
+
     rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"], disabled=disabled)
     settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"], disabled=disabled)
     rainfall_file = st.file_uploader(
@@ -236,15 +265,16 @@ if run_btn:
                 st.code(traceback.format_exc())
             st.info(
                 "Common causes: a zipped shapefile missing its .dbf/.shx/.prj siblings, "
-                "a DEM without a defined coordinate system, or a rivers/AOI file with no "
-                "valid geometry. Check your files and try again."
+                "a DEM without a defined coordinate system, a rivers/AOI file with no "
+                "valid geometry, or a DEM covering too large an area for this app's "
+                "memory limit (see the size guidance next to the DEM upload field)."
             )
 else:
     st.info("Choose **Use my own data** or **Use sample data (Trivandrum, Kerala)** in the sidebar to get started.")
-    st.markdown("""
+    st.markdown(f"""
     **Expected inputs**
     - **AOI**: district/study-area boundary polygon
-    - **DEM**: elevation raster (SRTM 30m or ASTER), GeoTIFF
+    - **DEM**: elevation raster (SRTM 30m or ASTER), GeoTIFF — keep it under ~{DEM_SIZE_WARNING_MB}MB (a district or taluk works well; a full state DEM is likely too large for this app's memory limit)
     - **Rivers**: water body/river lines or polygons (e.g. from OpenStreetMap)
     - **Rainfall** *(optional)*: a raster of average monsoon-season rainfall — adds a 4th weighted criterion
     - **Settlements** *(optional)*: village/settlement points, to count how many fall in each susceptibility zone
