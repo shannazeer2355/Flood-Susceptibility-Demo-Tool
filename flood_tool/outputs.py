@@ -2,7 +2,7 @@
 outputs.py
 ----------
 Write final results to disk: risk raster (GeoTIFF) and risk polygons
-(GeoJSON), matching the deliverables list in the brief.
+(GeoJSON).
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def polygonize_zones(zones: np.ndarray, grid, out_path: str) -> gpd.GeoDataFrame
         records.append({"geometry": shape(geom), "risk_zone": ZONE_LABELS[int(value)]})
 
     gdf = gpd.GeoDataFrame(records, crs=grid.crs)
-    gdf = gdf.dissolve(by="risk_zone", as_index=False)  # merge adjacent same-zone polygons
+    gdf = gdf.dissolve(by="risk_zone", as_index=False)
     gdf["area_km2"] = gdf.geometry.area / 1_000_000
     gdf.to_file(out_path, driver="GeoJSON")
     return gdf

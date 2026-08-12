@@ -1,8 +1,7 @@
 """
 visualize.py
 ------------
-Static (matplotlib) and interactive (folium) visualisation of the
-flood risk classification.
+Static (matplotlib) and interactive (folium) visualisation.
 """
 from __future__ import annotations
 
@@ -19,9 +18,9 @@ _CMAP = ListedColormap(["#ffffff00", ZONE_COLORS[1], ZONE_COLORS[2], ZONE_COLORS
 _NORM = BoundaryNorm([0, 1, 2, 3, 4], _CMAP.N)
 
 
-def plot_static_map(zones: np.ndarray, grid, out_path: str, title: str = "Flood Risk Zones"):
+def plot_static_map(zones: np.ndarray, grid, out_path: str, title: str = "Flood Susceptibility Zones"):
     fig, ax = plt.subplots(figsize=(9, 8))
-    im = ax.imshow(zones, cmap=_CMAP, norm=_NORM, interpolation="nearest")
+    ax.imshow(zones, cmap=_CMAP, norm=_NORM, interpolation="nearest")
     ax.set_title(title, fontsize=14, fontweight="bold")
     ax.set_xlabel("Column"); ax.set_ylabel("Row")
 
@@ -38,10 +37,6 @@ def plot_static_map(zones: np.ndarray, grid, out_path: str, title: str = "Flood 
 
 
 def build_interactive_map(zones_tif_path: str, out_html: str, aoi=None):
-    """
-    Build a folium map: adds the risk raster as an ImageOverlay reprojected
-    to EPSG:4326, plus the AOI boundary if provided.
-    """
     with rasterio.open(zones_tif_path) as src:
         data = src.read(1)
         bounds_4326 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
@@ -62,7 +57,7 @@ def build_interactive_map(zones_tif_path: str, out_html: str, aoi=None):
         image=rgba,
         bounds=[[south, west], [north, east]],
         opacity=0.75,
-        name="Flood Risk Zones",
+        name="Flood Susceptibility Zones",
     ).add_to(m)
 
     if aoi is not None:
@@ -77,7 +72,7 @@ def build_interactive_map(zones_tif_path: str, out_html: str, aoi=None):
     <div style="position: fixed; bottom: 30px; left: 30px; z-index:9999;
                 background:white; padding:10px; border:2px solid grey; border-radius:6px;
                 font-size:14px;">
-      <b>Flood Risk</b><br>
+      <b>Flood Susceptibility</b><br>
       <span style="color:#e74c3c;">&#9632;</span> High<br>
       <span style="color:#f1c40f;">&#9632;</span> Medium<br>
       <span style="color:#2ecc71;">&#9632;</span> Low

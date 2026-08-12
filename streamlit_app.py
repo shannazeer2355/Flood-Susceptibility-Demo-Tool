@@ -6,18 +6,12 @@ GUI dashboard for the Flood Susceptibility Demo Tool.
 
 Run with:
     streamlit run streamlit_app.py
-
-Lets the user upload AOI / DEM / rivers / settlements files, tune
-overlay weights with sliders, run the pipeline, and preview/download
-all outputs without touching the command line. Also includes a
-one-click "Use sample data" option that loads a real, bundled
-district dataset, so the app can be tried instantly without any
-uploads.
 """
 import os
 import shutil
 import tempfile
 
+import pandas as pd
 import rasterio
 import streamlit as st
 import streamlit.components.v1 as components
@@ -26,17 +20,18 @@ from flood_tool.pipeline import run_pipeline
 
 st.set_page_config(page_title="Flood Susceptibility Demo Tool", layout="wide")
 st.title("🌊 Flood Susceptibility Demo Tool by Mohammed Shan")
-st.caption("DEM + Slope + River Distance → Weighted Overlay → Flood Susceptibility Zones")
+st.caption("DEM + Slope + River Distance + Rainfall (optional) → Weighted Overlay → Flood Susceptibility Zones")
 
 # Bundled real district datasets. Add more districts here as data becomes
 # available — each just needs an AOI, DEM, and rivers file checked into
-# the sample_data/ folder in the repo.
+# the sample_data/ folder in the repo. "rainfall" is optional per region.
 REAL_DEMO_REGIONS = {
     "Trivandrum, Kerala": {
         "aoi": "sample_data/trivandrum/boundary.shp",
         "dem": "sample_data/trivandrum/dem.tif",
         "rivers": "sample_data/trivandrum/rivers.shp",
         "settlements": None,
+        "rainfall": "sample_data/trivandrum/rainfall.tif",  # optional; used if present
     },
 }
 
@@ -50,9 +45,7 @@ def _describe_crs(raster_path: str) -> str:
                 return "Unknown"
             epsg = crs.to_epsg()
             name = crs.to_string()
-            if epsg:
-                return f"EPSG:{epsg} — {name}"
-            return name
+            return f"EPSG:{epsg} — {name}" if epsg else name
     except Exception:
         return "Unavailable"
 
@@ -71,49 +64,6 @@ def _describe_input_crs(aoi_path: str) -> str:
         return "Unavailable"
 
 
-with st.sidebar:
-    st.header("1. Data Source")
-
-    data_mode = st.radio(
-        "How do you want to provide data?",
-        options=["Use my own data", "Use sample data (Trivandrum, Kerala)"],
-        index=0,
-    )
-    use_sample_data = data_mode.startswith("Use sample")
-
-    aoi_file = dem_file = rivers_file = settlements_file = None
-    sample_region_ready = False
-
-    if use_sample_data:
-        region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
-        missing = [k for k in ("aoi", "dem", "rivers") if region[k] and not os.path.exists(region[k])]
-        if missing:
-            st.error(
-                f"Sample data isn't bundled with this app yet (missing: {', '.join(missing)})."
-            )
-        else:
-            sample_region_ready = True
-            st.success("Real SRTM elevation and OpenStreetMap rivers for Trivandrum, Kerala will be used.")
-    else:
-        st.caption("Upload your own AOI, DEM, and river layers below.")
-        aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"])
-        dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"])
-        rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"])
-        settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"])
-
-    st.header("2. Overlay Weights")
-    w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.4, 0.05)
-    w_slope = st.slider("Slope weight", 0.0, 1.0, 0.3, 0.05)
-    w_river = st.slider("River-distance weight", 0.0, 1.0, 0.3, 0.05)
-    st.caption(f"Weights auto-normalise to sum to 1.0 (currently {w_elev + w_slope + w_river:.2f})")
-
-    st.header("3. River Buffer Zones")
-    river_near = st.number_input("High susceptibility within (m)", value=500, step=50)
-    river_far = st.number_input("Low susceptibility beyond (m)", value=1500, step=50)
-
-    run_btn = st.button("🚀 Generate Flood Susceptibility Map", type="primary", use_container_width=True)
-
-
 def _save_upload(upload, workdir):
     if upload is None:
         return None
@@ -130,35 +80,99 @@ def _save_upload(upload, workdir):
     return path
 
 
+with st.sidebar:
+    st.header("1. Choose your data source")
+    data_source = st.radio(
+        "Data source",
+        ["Use my own data", "Use sample data (Trivandrum, Kerala)"],
+        label_visibility="collapsed",
+    )
+    using_sample = data_source == "Use sample data (Trivandrum, Kerala)"
+
+    if using_sample:
+        region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
+        missing = [k for k in ("aoi", "dem", "rivers") if not os.path.exists(region[k])]
+        if missing:
+            st.error(f"Sample data isn't fully bundled with this app yet (missing: {', '.join(missing)}).")
+            using_sample = False
+        else:
+            st.success("Trivandrum, Kerala selected — real SRTM elevation and OpenStreetMap water body data.")
+            if region.get("rainfall") and os.path.exists(region["rainfall"]):
+                st.caption("✓ Rainfall climatology also available for this region.")
+
+    st.divider()
+    st.header("2. Upload Data")
+    disabled = using_sample
+    aoi_file = st.file_uploader("AOI boundary (.shp needs zip, or .geojson)", type=["geojson", "json", "zip"], disabled=disabled)
+    dem_file = st.file_uploader("DEM raster (.tif)", type=["tif", "tiff"], disabled=disabled)
+    rivers_file = st.file_uploader("Rivers layer (.geojson or zipped .shp)", type=["geojson", "json", "zip"], disabled=disabled)
+    settlements_file = st.file_uploader("Settlements/villages (optional)", type=["geojson", "json", "zip"], disabled=disabled)
+    rainfall_file = st.file_uploader(
+        "Rainfall raster (optional, .tif — e.g. monsoon-season average)",
+        type=["tif", "tiff"], disabled=disabled,
+        help="Long-term average monsoon (Jun–Sep) rainfall works best — a stable indicator, "
+             "not tied to any single year's weather.",
+    )
+
+    st.header("3. Overlay Weights")
+    include_rainfall = (using_sample and region.get("rainfall") and os.path.exists(region.get("rainfall", ""))) or (rainfall_file is not None)
+    if include_rainfall:
+        w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.3, 0.05)
+        w_slope = st.slider("Slope weight", 0.0, 1.0, 0.2, 0.05)
+        w_river = st.slider("River-distance weight", 0.0, 1.0, 0.2, 0.05)
+        w_rain = st.slider("Rainfall weight", 0.0, 1.0, 0.3, 0.05)
+        st.caption(f"Weights auto-normalise to sum to 1.0 (currently {w_elev + w_slope + w_river + w_rain:.2f})")
+    else:
+        w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.4, 0.05)
+        w_slope = st.slider("Slope weight", 0.0, 1.0, 0.3, 0.05)
+        w_river = st.slider("River-distance weight", 0.0, 1.0, 0.3, 0.05)
+        w_rain = 0.0
+        st.caption(f"Weights auto-normalise to sum to 1.0 (currently {w_elev + w_slope + w_river:.2f})")
+        st.caption("Add a rainfall raster above to unlock a 4th weighted criterion.")
+
+    st.header("4. River Buffer Zones")
+    river_near = st.number_input("High susceptibility within (m)", value=500, step=50)
+    river_far = st.number_input("Low susceptibility beyond (m)", value=1500, step=50)
+
+    run_btn = st.button("🚀 Generate Flood Susceptibility Map", type="primary", use_container_width=True)
+
+
 if run_btn:
-    if use_sample_data and not sample_region_ready:
-        st.error("Sample data isn't available. Please switch to 'Use my own data' and upload your files.")
-    elif not use_sample_data and not (aoi_file and dem_file and rivers_file):
-        st.error("Please upload AOI, DEM, and Rivers layers.")
+    if not using_sample and not (aoi_file and dem_file and rivers_file):
+        st.error("Please upload AOI, DEM, and Rivers layers, or choose the sample data option in the sidebar.")
     else:
         with tempfile.TemporaryDirectory() as workdir:
-            if use_sample_data:
+            if using_sample:
                 region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
                 aoi_path = region["aoi"]
                 dem_path = region["dem"]
                 rivers_path = region["rivers"]
                 settlements_path = region["settlements"]
+                rainfall_path = region["rainfall"] if region.get("rainfall") and os.path.exists(region["rainfall"]) else None
             else:
                 aoi_path = _save_upload(aoi_file, workdir)
                 dem_path = _save_upload(dem_file, workdir)
                 rivers_path = _save_upload(rivers_file, workdir)
                 settlements_path = _save_upload(settlements_file, workdir)
+                rainfall_path = _save_upload(rainfall_file, workdir)
 
             out_dir = os.path.join(workdir, "outputs")
+            weights = {"elevation": w_elev, "slope": w_slope, "river": w_river}
+            if rainfall_path:
+                weights["rainfall"] = w_rain
+
             with st.spinner("Running pipeline: clipping DEM, computing slope, river distance, overlay..."):
                 result = run_pipeline(
                     aoi_path=aoi_path, dem_path=dem_path, rivers_path=rivers_path,
-                    settlements_path=settlements_path, out_dir=out_dir,
-                    weights={"elevation": w_elev, "slope": w_slope, "river": w_river},
+                    settlements_path=settlements_path, rainfall_path=rainfall_path,
+                    out_dir=out_dir, weights=weights,
                     river_near_m=river_near, river_far_m=river_far,
                 )
 
             st.success("Flood susceptibility map generated!")
+
+            if result.get("used_rainfall"):
+                st.info("📊 This result includes rainfall as a 4th weighted criterion.")
 
             input_crs_desc = _describe_input_crs(aoi_path)
             working_crs_desc = _describe_crs(result["raster"])
@@ -198,14 +212,12 @@ if run_btn:
                 with open(path, "rb") as f:
                     col.download_button(label, f, file_name=os.path.basename(path))
 else:
-    if use_sample_data and sample_region_ready:
-        st.info("Sample data is ready — click **Generate Flood Susceptibility Map** in the sidebar to run it.")
-    else:
-        st.info("Upload your own AOI, DEM, and Rivers layers in the sidebar, or switch to sample data for an instant example.")
+    st.info("Choose **Use my own data** or **Use sample data (Trivandrum, Kerala)** in the sidebar to get started.")
     st.markdown("""
     **Expected inputs**
     - **AOI**: district/study-area boundary polygon
     - **DEM**: elevation raster (SRTM 30m or ASTER), GeoTIFF
     - **Rivers**: water body/river lines or polygons (e.g. from OpenStreetMap)
+    - **Rainfall** *(optional)*: a raster of average monsoon-season rainfall — adds a 4th weighted criterion
     - **Settlements** *(optional)*: village/settlement points, to count how many fall in each susceptibility zone
     """)

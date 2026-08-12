@@ -111,6 +111,27 @@ def clip_and_reproject_dem(dem_path: str, aoi: gpd.GeoDataFrame, resolution: flo
     return elevation, grid
 
 
+def resample_raster_to_grid(raster_path: str, grid: Grid, resampling: Resampling = Resampling.bilinear) -> np.ndarray:
+    """
+    Reproject/resample any single-band raster (e.g. rainfall) so it lines
+    up pixel-for-pixel with an already-established reference Grid (the
+    same grid the DEM was clipped to). Returns an array of shape grid.shape.
+    """
+    with rasterio.open(raster_path) as src:
+        dst_array = np.full(grid.shape, grid.nodata, dtype="float32")
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=dst_array,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=grid.transform,
+            dst_crs=grid.crs,
+            dst_nodata=grid.nodata,
+            resampling=resampling,
+        )
+    return dst_array
+
+
 def load_vector_on_grid(path: str, grid: Grid) -> gpd.GeoDataFrame:
     """Load a vector layer (rivers, roads, settlements) reprojected to the grid CRS."""
     gdf = gpd.read_file(path)

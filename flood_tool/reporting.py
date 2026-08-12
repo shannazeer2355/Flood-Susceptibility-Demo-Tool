@@ -1,17 +1,13 @@
 """
 reporting.py
 ------------
-Summary statistics for the flood risk classification:
-  * % / km2 of AOI area in each risk zone
-  * number of settlement/village points falling in each zone (if given)
-  * writes summary.csv
+Summary statistics for the flood risk classification.
 """
 from __future__ import annotations
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import rasterio
 
 from .overlay import ZONE_LABELS
 
@@ -34,9 +30,7 @@ def area_statistics(zones: np.ndarray, grid) -> pd.DataFrame:
 
 
 def settlements_by_zone(settlements_path: str, zones: np.ndarray, grid) -> pd.DataFrame:
-    """Count settlement/village point features falling in each risk zone."""
     gdf = gpd.read_file(settlements_path).to_crs(grid.crs)
-    # Use point representation (centroid for polygons) for sampling
     pts = gdf.geometry.representative_point()
 
     inv_transform = ~grid.transform
