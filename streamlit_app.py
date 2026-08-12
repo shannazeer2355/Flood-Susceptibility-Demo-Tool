@@ -10,6 +10,7 @@ Run with:
 import os
 import shutil
 import tempfile
+import traceback
 
 import pandas as pd
 import rasterio
@@ -36,7 +37,6 @@ REAL_DEMO_REGIONS = {
 }
 
 # --- Contact details shown in the sidebar footer -----------------------------
-# Fill this in with your real Gmail address.
 CONTACT_EMAIL = "shangeography@gmail.com"
 
 
@@ -77,10 +77,17 @@ def _save_upload(upload, workdir):
     if path.endswith(".zip"):
         extract_dir = path.replace(".zip", "")
         shutil.unpack_archive(path, extract_dir)
-        for fn in os.listdir(extract_dir):
-            if fn.endswith(".shp"):
-                return os.path.join(extract_dir, fn)
-        raise ValueError(f"No .shp found inside {upload.name}")
+        # Search recursively — some zip tools nest contents inside a
+        # subfolder matching the zip's own name, so we can't assume the
+        # .shp sits directly at the top level.
+        for root, _dirs, files in os.walk(extract_dir):
+            for fn in files:
+                if fn.endswith(".shp"):
+                    return os.path.join(root, fn)
+        raise ValueError(
+            f"No .shp file found anywhere inside {upload.name}. "
+            "Make sure the zip contains the .shp plus its .dbf/.shx/.prj siblings."
+        )
     return path
 
 
@@ -119,7 +126,8 @@ with st.sidebar:
     )
 
     st.header("3. Overlay Weights")
-    include_rainfall = (using_sample and region.get("rainfall") and os.path.exists(region.get("rainfall", ""))) or (rainfall_file is not None)
+    rainfall_available_in_sample = bool(using_sample and REAL_DEMO_REGIONS["Trivandrum, Kerala"].get("rainfall") and os.path.exists(REAL_DEMO_REGIONS["Trivandrum, Kerala"]["rainfall"]))
+    include_rainfall = rainfall_available_in_sample or (rainfall_file is not None)
     if include_rainfall:
         w_elev = st.slider("Elevation weight", 0.0, 1.0, 0.3, 0.05)
         w_slope = st.slider("Slope weight", 0.0, 1.0, 0.2, 0.05)
@@ -150,76 +158,87 @@ if run_btn:
     if not using_sample and not (aoi_file and dem_file and rivers_file):
         st.error("Please upload AOI, DEM, and Rivers layers, or choose the sample data option in the sidebar.")
     else:
-        with tempfile.TemporaryDirectory() as workdir:
-            if using_sample:
-                region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
-                aoi_path = region["aoi"]
-                dem_path = region["dem"]
-                rivers_path = region["rivers"]
-                settlements_path = region["settlements"]
-                rainfall_path = region["rainfall"] if region.get("rainfall") and os.path.exists(region["rainfall"]) else None
-            else:
-                aoi_path = _save_upload(aoi_file, workdir)
-                dem_path = _save_upload(dem_file, workdir)
-                rivers_path = _save_upload(rivers_file, workdir)
-                settlements_path = _save_upload(settlements_file, workdir)
-                rainfall_path = _save_upload(rainfall_file, workdir)
+        try:
+            with tempfile.TemporaryDirectory() as workdir:
+                if using_sample:
+                    region = REAL_DEMO_REGIONS["Trivandrum, Kerala"]
+                    aoi_path = region["aoi"]
+                    dem_path = region["dem"]
+                    rivers_path = region["rivers"]
+                    settlements_path = region["settlements"]
+                    rainfall_path = region["rainfall"] if region.get("rainfall") and os.path.exists(region["rainfall"]) else None
+                else:
+                    aoi_path = _save_upload(aoi_file, workdir)
+                    dem_path = _save_upload(dem_file, workdir)
+                    rivers_path = _save_upload(rivers_file, workdir)
+                    settlements_path = _save_upload(settlements_file, workdir)
+                    rainfall_path = _save_upload(rainfall_file, workdir)
 
-            out_dir = os.path.join(workdir, "outputs")
-            weights = {"elevation": w_elev, "slope": w_slope, "river": w_river}
-            if rainfall_path:
-                weights["rainfall"] = w_rain
+                out_dir = os.path.join(workdir, "outputs")
+                weights = {"elevation": w_elev, "slope": w_slope, "river": w_river}
+                if rainfall_path:
+                    weights["rainfall"] = w_rain
 
-            with st.spinner("Running pipeline: clipping DEM, computing slope, river distance, overlay..."):
-                result = run_pipeline(
-                    aoi_path=aoi_path, dem_path=dem_path, rivers_path=rivers_path,
-                    settlements_path=settlements_path, rainfall_path=rainfall_path,
-                    out_dir=out_dir, weights=weights,
-                    river_near_m=river_near, river_far_m=river_far,
+                with st.spinner("Running pipeline: clipping DEM, computing slope, river distance, overlay..."):
+                    result = run_pipeline(
+                        aoi_path=aoi_path, dem_path=dem_path, rivers_path=rivers_path,
+                        settlements_path=settlements_path, rainfall_path=rainfall_path,
+                        out_dir=out_dir, weights=weights,
+                        river_near_m=river_near, river_far_m=river_far,
+                    )
+
+                st.success("Flood susceptibility map generated!")
+
+                if result.get("used_rainfall"):
+                    st.info("📊 This result includes rainfall as a 4th weighted criterion.")
+
+                input_crs_desc = _describe_input_crs(aoi_path)
+                working_crs_desc = _describe_crs(result["raster"])
+                st.caption(
+                    f"📐 **Projection:** your AOI was supplied in **{input_crs_desc}** and was "
+                    f"automatically reprojected to **{working_crs_desc}** for analysis — the correct "
+                    "local, metre-based coordinate system for this region, auto-detected from your data's "
+                    "location. This works the same way for data from anywhere in the world, so distances "
+                    "and areas are always measured accurately regardless of what projection you upload in."
                 )
 
-            st.success("Flood susceptibility map generated!")
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.subheader("Interactive Map")
+                    with open(result["interactive_map"], "r", encoding="utf-8") as f:
+                        components.html(f.read(), height=550, scrolling=False)
 
-            if result.get("used_rainfall"):
-                st.info("📊 This result includes rainfall as a 4th weighted criterion.")
+                with col2:
+                    st.subheader("Area by Susceptibility Zone")
+                    st.dataframe(result["area_stats"], use_container_width=True, hide_index=True)
+                    if result["settlement_stats"] is not None:
+                        st.subheader("Settlements in Each Susceptibility Zone")
+                        st.dataframe(result["settlement_stats"], use_container_width=True, hide_index=True)
 
-            input_crs_desc = _describe_input_crs(aoi_path)
-            working_crs_desc = _describe_crs(result["raster"])
-            st.caption(
-                f"📐 **Projection:** your AOI was supplied in **{input_crs_desc}** and was "
-                f"automatically reprojected to **{working_crs_desc}** for analysis — the correct "
-                "local, metre-based coordinate system for this region, auto-detected from your data's "
-                "location. This works the same way for data from anywhere in the world, so distances "
-                "and areas are always measured accurately regardless of what projection you upload in."
+                st.subheader("Static Map")
+                st.image(result["static_map"], use_container_width=True)
+
+                st.subheader("Downloads")
+                dl_cols = st.columns(4)
+                labels_paths = [
+                    ("GeoTIFF", result["raster"]),
+                    ("GeoJSON zones", result["geojson"]),
+                    ("Summary CSV", result["summary_csv"]),
+                    ("Static PNG", result["static_map"]),
+                ]
+                for col, (label, path) in zip(dl_cols, labels_paths):
+                    with open(path, "rb") as f:
+                        col.download_button(label, f, file_name=os.path.basename(path))
+
+        except Exception as exc:
+            st.error(f"⚠️ Something went wrong while processing your data: {exc}")
+            with st.expander("Show full technical details"):
+                st.code(traceback.format_exc())
+            st.info(
+                "Common causes: a zipped shapefile missing its .dbf/.shx/.prj siblings, "
+                "a DEM without a defined coordinate system, or a rivers/AOI file with no "
+                "valid geometry. Check your files and try again."
             )
-
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.subheader("Interactive Map")
-                with open(result["interactive_map"], "r", encoding="utf-8") as f:
-                    components.html(f.read(), height=550, scrolling=False)
-
-            with col2:
-                st.subheader("Area by Susceptibility Zone")
-                st.dataframe(result["area_stats"], use_container_width=True, hide_index=True)
-                if result["settlement_stats"] is not None:
-                    st.subheader("Settlements in Each Susceptibility Zone")
-                    st.dataframe(result["settlement_stats"], use_container_width=True, hide_index=True)
-
-            st.subheader("Static Map")
-            st.image(result["static_map"], use_container_width=True)
-
-            st.subheader("Downloads")
-            dl_cols = st.columns(4)
-            labels_paths = [
-                ("GeoTIFF", result["raster"]),
-                ("GeoJSON zones", result["geojson"]),
-                ("Summary CSV", result["summary_csv"]),
-                ("Static PNG", result["static_map"]),
-            ]
-            for col, (label, path) in zip(dl_cols, labels_paths):
-                with open(path, "rb") as f:
-                    col.download_button(label, f, file_name=os.path.basename(path))
 else:
     st.info("Choose **Use my own data** or **Use sample data (Trivandrum, Kerala)** in the sidebar to get started.")
     st.markdown("""
