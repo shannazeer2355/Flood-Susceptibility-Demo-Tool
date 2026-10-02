@@ -1,10 +1,10 @@
 # 🌊 Flood Risk Mapping Tool
 
-A Python GIS pipeline that generates **Flood Risk Zone maps (High / Medium / Low)**
-from a Digital Elevation Model (DEM), slope, and distance-to-river layers, using a
-weighted overlay method. Built for the internship brief: elevation + slope + river
-proximity → weighted score → classified risk map → statistics → static & interactive
-visualisation.
+A Python GIS pipeline that generates **Flood Risk Zone maps (High / Medium / Low)** from a Digital Elevation Model (DEM), slope, and distance-to-river layers, using a weighted overlay method.
+
+Developed during a GIS internship at Avakara GeoScience Research Technologies (AGSRT) for multi-criteria flood susceptibility assessment in Alappuzha District, Kerala. Workflow: elevation + slope + river proximity → weighted score → classified risk map → statistics → static & interactive visualisation.
+
+**Live app:** https://floodsusceptibility-by-shan.streamlit.app
 
 ![sample output](outputs/flood_risk_map.png)
 
@@ -139,4 +139,4 @@ downloads for every output file.
 
 ## License
 
-MIT — free to use for coursework, portfolios, and internship submissions.
+MIT License. See [LICENSE](LICENSE).
