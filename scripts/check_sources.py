@@ -39,21 +39,17 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
     aoi = boundaries.district(args.district) if args.district else args.aoi
-    times, last = {}, [time.time()]
+    times = {}
+    t0 = time.time()
 
     def progress(done, total, label):
-        now = time.time()
-        if done:
-            times[prev[0]] = now - last[0]
-        last[0], prev[0] = now, label
+        times[label] = time.time() - t0
 
-    prev = [None]
-    t0 = time.time()
     stack = open_data.fetch_layers(aoi, resolution=args.resolution, progress=progress)
     print(f"\nGrid {stack.grid.width} x {stack.grid.height} at {stack.grid.resolution:.0f} m, "
           f"AOI {stack.mask.sum() * stack.grid.resolution ** 2 / 1e6:.0f} km², fetched in {time.time() - t0:.0f} s")
     for label, sec in times.items():
-        print(f"  {sec:6.1f} s  {label}")
+        print(f"  ready after {sec:6.1f} s  {label}")
     print("\nLayer status:")
     for key, (ok, msg) in stack.status.items():
         print(f"  [{'ok' if ok else 'FAILED'}] {msg}")
