@@ -50,7 +50,7 @@ class LayerStack:
 
 
 def fetch_layers(aoi, resolution: float | None = None, layers=OPTIONAL_LAYERS, progress=None,
-                 timeout_s: float = 120.0) -> LayerStack:
+                 timeout_s: float = 180.0) -> LayerStack:
     """
     aoi: path or GeoDataFrame. layers: optional layers to fetch besides the DEM.
     The optional layers are fetched in parallel; any that has not arrived

@@ -26,6 +26,7 @@ import numpy as np
 import rasterio
 import rasterio.errors
 import requests
+from rasterio.io import MemoryFile
 from rasterio.warp import Resampling, reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 from shapely.geometry import LineString, Polygon
@@ -184,12 +185,19 @@ def _soilgrids_wcs(prop: str, depth: str, grid) -> np.ndarray:
     r.raise_for_status()
     if not r.headers.get("content-type", "").startswith("image/tiff"):
         raise ValueError(f"SoilGrids WCS returned {r.headers.get('content-type')}: {r.text[:200]}")
+    with MemoryFile(r.content) as mem, mem.open() as src:
+        data = src.read(1).astype("float32")
+        profile = src.profile
+    data[data <= 0] = np.nan
+    profile.update(dtype="float32", nodata=np.nan)
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as f:
-        f.write(r.content)
+        path = f.name
     try:
-        return read_to_grid(f.name, grid, Resampling.bilinear)
+        with rasterio.open(path, "w", **profile) as dst:
+            dst.write(data, 1)
+        return read_to_grid(path, grid, Resampling.bilinear)
     finally:
-        os.remove(f.name)
+        os.remove(path)
 
 
 def fetch_clay(grid, depth: str = "5-15cm") -> np.ndarray:
@@ -212,7 +220,7 @@ def fetch_monsoon_rainfall(grid, months=(6, 7, 8, 9)) -> np.ndarray:
 
 
 OVERPASS_QUERY = """
-[out:json][timeout:180];
+[out:json][timeout:75];
 (
   way["waterway"~"^(river|stream|canal|drain)$"]({s},{w},{n},{e});
   way["natural"="water"]({s},{w},{n},{e});
@@ -228,7 +236,7 @@ def fetch_osm_water(grid) -> gpd.GeoDataFrame:
     last_error = None
     for url in OVERPASS_URLS:
         try:
-            r = _session().post(url, data={"data": query}, timeout=240)
+            r = _session().post(url, data={"data": query}, timeout=80)
             r.raise_for_status()
             elements = r.json()["elements"]
             break
