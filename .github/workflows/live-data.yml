@@ -8,8 +8,6 @@ on:
         default: Thiruvananthapuram
   schedule:
     - cron: "17 3 * * 1"
-  push:
-    branches: [open-data]
 
 permissions:
   contents: read
