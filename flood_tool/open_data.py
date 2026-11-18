@@ -9,6 +9,8 @@ weights or parameters without downloading anything again.
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 import geopandas as gpd
@@ -47,30 +49,31 @@ class LayerStack:
     status: dict = field(default_factory=dict)
 
 
-def fetch_layers(aoi, resolution: float | None = None, layers=OPTIONAL_LAYERS, progress=None) -> LayerStack:
+def fetch_layers(aoi, resolution: float | None = None, layers=OPTIONAL_LAYERS, progress=None,
+                 timeout_s: float = 120.0) -> LayerStack:
     """
     aoi: path or GeoDataFrame. layers: optional layers to fetch besides the DEM.
-    progress: optional callback(done, total, label).
+    The optional layers are fetched in parallel; any that has not arrived
+    within timeout_s is left out. progress: optional callback(done, total, label),
+    called as each layer arrives.
     """
     aoi = io_utils.load_aoi(aoi)
     grid = io_utils.grid_from_aoi(aoi, resolution)
     mask = io_utils.aoi_mask(aoi, grid)
     logger.info("Analysis grid: %d x %d px at %.0f m", grid.width, grid.height, grid.resolution)
 
-    steps = ["dem", *[k for k in OPTIONAL_LAYERS if k in layers]]
+    optional = [k for k in OPTIONAL_LAYERS if k in layers]
+    total = 1 + len(optional)
     status = {}
 
-    def report(i, key):
-        if progress:
-            progress(i, len(steps), SOURCES[key])
-
-    report(0, "dem")
     dem = sources.fetch_dem(grid)
     mask &= ~np.isnan(dem)
     if not mask.any():
         raise ValueError("No elevation data inside the AOI.")
     elevation = np.where(mask, dem, grid.nodata).astype("float32")
     status["dem"] = (True, SOURCES["dem"])
+    if progress:
+        progress(1, total, SOURCES["dem"])
 
     stack = LayerStack(aoi=aoi, grid=grid, mask=mask, elevation=elevation, status=status)
     fetchers = {
@@ -80,27 +83,37 @@ def fetch_layers(aoi, resolution: float | None = None, layers=OPTIONAL_LAYERS, p
         "landcover": lambda: sources.fetch_landcover(grid),
         "soil": lambda: sources.fetch_clay(grid),
     }
-    for i, key in enumerate(steps[1:], start=1):
-        report(i, key)
-        try:
-            data = fetchers[key]()
-        except Exception as exc:
-            logger.warning("%s unavailable: %s", SOURCES[key], exc)
-            status[key] = (False, f"{SOURCES[key]}: {exc}")
-            continue
-        status[key] = (True, SOURCES[key])
-        if key == "osm":
-            stack.waterways = data
-        elif key == "jrc":
-            stack.water = data
-        elif key == "rainfall":
-            stack.rainfall = data
-        elif key == "landcover":
-            stack.landcover = data
-        elif key == "soil":
-            stack.clay = data
-    if progress:
-        progress(len(steps), len(steps), "done")
+    attrs = {"osm": "waterways", "jrc": "water", "rainfall": "rainfall", "landcover": "landcover", "soil": "clay"}
+
+    if optional:
+        pool = ThreadPoolExecutor(max_workers=len(optional))
+        futures = {pool.submit(fetchers[k]): k for k in optional}
+        pending, done_count = set(futures), 1
+        deadline = time.monotonic() + timeout_s
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            for f in done:
+                key = futures[f]
+                done_count += 1
+                try:
+                    setattr(stack, attrs[key], f.result())
+                    status[key] = (True, SOURCES[key])
+                except Exception as exc:
+                    logger.warning("%s unavailable: %s", SOURCES[key], exc)
+                    status[key] = (False, f"{SOURCES[key]}: {exc}")
+                if progress:
+                    progress(done_count, total, SOURCES[key])
+        for f in pending:
+            key = futures[f]
+            logger.warning("%s did not respond within %.0f s", SOURCES[key], timeout_s)
+            status[key] = (False, f"{SOURCES[key]}: no response within {timeout_s:.0f} s")
+        pool.shutdown(wait=False, cancel_futures=True)
+        if pending and progress:
+            progress(total, total, "done")
+    stack.status = {k: status[k] for k in ["dem", *optional]}
     return stack
 
 
