@@ -75,3 +75,17 @@ def test_criteria_can_be_restricted(offline_sources, tmp_path):
                                       classification="fixed")
     assert set(result["weights"]) == {"elevation", "slope", "river"}
     assert result["breaks"] == (0.4, 0.7)
+
+
+def test_slow_layer_is_dropped(offline_sources, monkeypatch):
+    import time
+
+    def slow(grid):
+        time.sleep(3)
+        return np.full(grid.shape, 30.0, dtype="float32")
+
+    monkeypatch.setattr(sources, "fetch_clay", slow)
+    stack = open_data.fetch_layers(str(offline_sources / "boundary.shp"), layers=("osm", "soil"), timeout_s=1)
+    assert stack.status["osm"][0]
+    assert stack.status["soil"] == (False, "SoilGrids 2.0 clay, 5-15 cm: no response within 1 s")
+    assert stack.clay is None
