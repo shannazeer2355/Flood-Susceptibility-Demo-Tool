@@ -93,6 +93,8 @@ def build_interactive_map(zones_tif_path: str, out_html: str, aoi=None):
     with rasterio.open(zones_tif_path) as src:
         data, (west, south, east, north) = _reproject_to_web_mercator(src)
     center = [(south + north) / 2, (west + east) / 2]
+    span = max(east - west, 1.2 * (north - south), 1e-4)
+    zoom = int(np.clip(np.floor(np.log2(500 * 360 / (256 * span))), 2, 16))
 
     rgba = np.zeros((*data.shape, 4), dtype="uint8")
     color_map = {
@@ -103,7 +105,7 @@ def build_interactive_map(zones_tif_path: str, out_html: str, aoi=None):
     for zone_id, rgba_val in color_map.items():
         rgba[data == zone_id] = rgba_val
 
-    m = folium.Map(location=center, tiles="OpenStreetMap")
+    m = folium.Map(location=center, zoom_start=zoom, tiles="OpenStreetMap")
     folium.raster_layers.ImageOverlay(
         image=rgba,
         bounds=[[south, west], [north, east]],
