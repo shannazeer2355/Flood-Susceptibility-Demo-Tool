@@ -134,3 +134,28 @@ def build_interactive_map(zones_tif_path: str, out_html: str, aoi=None):
     m.get_root().html.add_child(folium.Element(legend_html))
     folium.LayerControl().add_to(m)
     m.save(out_html)
+
+
+def plot_criteria(scores: dict, grid, out_path: str, weights: dict | None = None):
+    """Small multiples of the 0-1 criterion scores, with their weights."""
+    from .ahp import CRITERIA
+
+    names = [k for k in CRITERIA if k in scores]
+    ncols = min(4, len(names))
+    nrows = int(np.ceil(len(names) / ncols))
+    t = grid.transform
+    extent_km = [t.c / 1000, (t.c + t.a * grid.width) / 1000,
+                 (t.f + t.e * grid.height) / 1000, t.f / 1000]
+    aspect = grid.height / max(grid.width, 1)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.2 * ncols, 3.2 * nrows * aspect + 0.8), squeeze=False)
+    for ax in axes.ravel():
+        ax.set_axis_off()
+    for ax, name in zip(axes.ravel(), names):
+        im = ax.imshow(scores[name], cmap="YlOrRd", vmin=0, vmax=1, extent=extent_km, interpolation="nearest")
+        label = CRITERIA[name]
+        if weights and name in weights:
+            label += f" ({weights[name]:.0%})"
+        ax.set_title(label, fontsize=10)
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="Susceptibility score")
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)

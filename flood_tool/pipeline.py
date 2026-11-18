@@ -1,18 +1,21 @@
 """
 pipeline.py
 -----------
-Orchestrates the full flood-susceptibility workflow. Rainfall is an
-optional 4th criterion — omit rainfall_path to get the original
-3-criteria (elevation/slope/river) behaviour, exactly as before.
+Two ways to run the analysis:
+
+  run_pipeline            from local files (DEM, water layer, optional rainfall)
+  run_open_data_pipeline  every layer fetched for the AOI from open data
+                          services, weighted with AHP
 """
 from __future__ import annotations
 
 import logging
 import os
 
+import numpy as np
 from rasterio.warp import Resampling
 
-from . import io_utils, terrain, river_distance, rainfall as rainfall_mod, overlay, outputs, reporting, visualize
+from . import ahp, io_utils, open_data, terrain, river_distance, rainfall as rainfall_mod, overlay, outputs, reporting, visualize
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,7 @@ def run_pipeline(
     max_slope_cutoff_deg: float = 15.0,
 ) -> dict:
     os.makedirs(out_dir, exist_ok=True)
-    total_steps = 8 if rainfall_path else 7
+    total_steps = 7 if rainfall_path else 6
 
     # --- Step 1: AOI + clip DEM -------------------------------------------------
     logger.info("Step 1/%d: Loading AOI and clipping DEM...", total_steps)
@@ -82,11 +85,19 @@ def run_pipeline(
     zones = overlay.classify_risk(score)
     step += 1
 
-    # --- Step 6/7: Write outputs ------------------------------------------------------
-    logger.info("Step %d/%d: Writing GeoTIFF / GeoJSON / summary.csv...", step, total_steps)
+    # --- Step 6/7: Write outputs and maps ---------------------------------------------
+    logger.info("Step %d/%d: Writing outputs and maps...", step, total_steps)
+    result = write_outputs(zones, grid, aoi, out_dir, settlements_path)
+    result["used_rainfall"] = rainfall_path is not None
+    return result
+
+
+def write_outputs(zones, grid, aoi, out_dir: str, settlements_path: str | None = None) -> dict:
     raster_path = os.path.join(out_dir, "flood_susceptibility.tif")
     geojson_path = os.path.join(out_dir, "flood_susceptibility_zones.geojson")
     summary_path = os.path.join(out_dir, "summary.csv")
+    static_map_path = os.path.join(out_dir, "flood_susceptibility_map.png")
+    interactive_map_path = os.path.join(out_dir, "interactive_map.html")
 
     outputs.write_raster(zones, grid, raster_path)
     outputs.polygonize_zones(zones, grid, geojson_path)
@@ -96,17 +107,10 @@ def run_pipeline(
     if settlements_path:
         settlements_df = reporting.settlements_by_zone(settlements_path, zones, grid)
     reporting.write_summary_csv(area_df, summary_path, settlements_df)
-    step += 1
-
-    # --- Step 7/8: Visualization --------------------------------------------------
-    logger.info("Step %d/%d: Rendering static and interactive maps...", step, total_steps)
-    static_map_path = os.path.join(out_dir, "flood_susceptibility_map.png")
-    interactive_map_path = os.path.join(out_dir, "interactive_map.html")
 
     visualize.plot_static_map(zones, grid, static_map_path)
     visualize.build_interactive_map(raster_path, interactive_map_path, aoi=aoi)
-
-    logger.info("Pipeline complete. Outputs written to '%s'.", out_dir)
+    logger.info("Outputs written to '%s'.", out_dir)
 
     return {
         "raster": raster_path,
@@ -116,5 +120,48 @@ def run_pipeline(
         "interactive_map": interactive_map_path,
         "area_stats": area_df,
         "settlement_stats": settlements_df,
-        "used_rainfall": rainfall_path is not None,
     }
+
+
+def score_open_data(stack, out_dir: str = "outputs", judgements: dict | None = None,
+                    criteria=None, classification: str = "natural_breaks",
+                    settlements_path: str | None = None, river_near_m: float = 500.0,
+                    river_far_m: float = 1500.0, max_slope_cutoff_deg: float = 15.0,
+                    drainage_radius_m: float = 1000.0) -> dict:
+    """Score, weight (AHP), classify and map a fetched LayerStack."""
+    os.makedirs(out_dir, exist_ok=True)
+    scores = open_data.criterion_scores(stack, river_near_m, river_far_m,
+                                        max_slope_cutoff_deg, drainage_radius_m)
+    if criteria is not None:
+        scores = {k: v for k, v in scores.items() if k in criteria}
+    names = [k for k in ahp.CRITERIA if k in scores]
+    weights, cr = ahp.weights_for(names, judgements)
+    logger.info("AHP weights: %s (CR = %.3f)", {k: round(v, 3) for k, v in weights.items()}, cr)
+
+    score = overlay.combine_scores(scores, weights)
+    score[~stack.mask] = np.nan
+    if classification == "natural_breaks":
+        medium_cut, high_cut = overlay.natural_breaks(score)
+    else:
+        medium_cut, high_cut = 0.4, 0.7
+    zones = overlay.classify_risk(score, high_cut=high_cut, medium_cut=medium_cut)
+
+    result = write_outputs(zones, stack.grid, stack.aoi, out_dir, settlements_path)
+    criteria_png = os.path.join(out_dir, "criteria_scores.png")
+    visualize.plot_criteria(scores, stack.grid, criteria_png, weights=weights)
+    result.update({
+        "criteria_map": criteria_png,
+        "weights": weights,
+        "consistency_ratio": cr,
+        "breaks": (medium_cut, high_cut),
+        "layer_status": dict(stack.status),
+        "score": score,
+        "zones": zones,
+    })
+    return result
+
+
+def run_open_data_pipeline(aoi, out_dir: str = "outputs", resolution: float | None = None, **kwargs) -> dict:
+    """Fetch every layer for the AOI from open data services and run the full analysis."""
+    stack = open_data.fetch_layers(aoi, resolution=resolution)
+    return score_open_data(stack, out_dir=out_dir, **kwargs)
