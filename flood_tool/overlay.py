@@ -4,27 +4,15 @@ overlay.py
 Combine the individual 0-1 criterion scores into a single weighted
 flood-susceptibility score, and classify it into High / Medium / Low zones.
 
-Two modes:
-  * 3-criteria (default, backward compatible):
-      Score = w_elev*elevation + w_slope*slope + w_river*river
-      Default weights: 0.4 / 0.3 / 0.3
-  * 4-criteria (when a rainfall layer is supplied):
-      Score = w_elev*elevation + w_slope*slope + w_river*river + w_rain*rainfall
-      Default weights: 0.3 / 0.2 / 0.2 / 0.3
+    Score = sum(w_i * s_i) / sum(w_i)
 
-Rainfall is optional so existing 3-criteria runs (and previously
-published results, e.g. the Alappuzha case study) remain reproducible
-exactly as before when no rainfall layer is provided.
+over the criteria that have data at each pixel. With the original three
+criteria (elevation, slope, distance to water) the default weights are
+0.4 / 0.3 / 0.3; adding rainfall gives 0.3 / 0.2 / 0.2 / 0.3. Weights for
+the full open-data set of criteria come from AHP (see ahp.py).
 
-Per-pixel fallback: where a pixel has no rainfall value (outside the
-rainfall source's coverage), that pixel uses the 3-criteria score
-instead of being dropped. Weights are renormalised to sum to 1 in
-whichever mode applies, at the same relative ratio the caller specified.
-
-Classification thresholds:
-    score > 0.7        -> High
-    0.4 <= score <= 0.7 -> Medium
-    score < 0.4         -> Low
+Classification uses fixed cut-offs (score > 0.7 High, 0.4-0.7 Medium,
+< 0.4 Low) or natural breaks fitted to the AOI's own score distribution.
 """
 from __future__ import annotations
 
@@ -34,55 +22,72 @@ DEFAULT_WEIGHTS_3 = {"elevation": 0.4, "slope": 0.3, "river": 0.3}
 DEFAULT_WEIGHTS_4 = {"elevation": 0.3, "slope": 0.2, "river": 0.2, "rainfall": 0.3}
 
 
-def weighted_overlay(elevation_risk: np.ndarray, slope_risk: np.ndarray,
-                      river_risk: np.ndarray, weights: dict | None = None,
-                      rainfall_risk: np.ndarray | None = None) -> np.ndarray:
-    has_rainfall = rainfall_risk is not None
-
-    # --- 3-criteria baseline score (always computed) ---------------------------
-    base_keys = ("elevation", "slope", "river")
-    base_defaults = DEFAULT_WEIGHTS_3
-    base_input = weights or (DEFAULT_WEIGHTS_4 if has_rainfall else base_defaults)
-    base_total = sum(base_input.get(k, base_defaults[k]) for k in base_keys)
-    if base_total <= 0:
-        raise ValueError("Elevation/slope/river weights must sum to a positive number.")
-    base_w = {k: base_input.get(k, base_defaults[k]) / base_total for k in base_keys}
-
-    score_base = (
-        base_w["elevation"] * np.nan_to_num(elevation_risk)
-        + base_w["slope"] * np.nan_to_num(slope_risk)
-        + base_w["river"] * np.nan_to_num(river_risk)
-    )
-    # True out-of-AOI pixels (no elevation/slope/river data at all) stay excluded
-    nan_mask = np.isnan(elevation_risk) | np.isnan(slope_risk) | np.isnan(river_risk)
-
-    if not has_rainfall:
-        score_base[nan_mask] = np.nan
-        return score_base
-
-    # --- 4-criteria score (only where rainfall has real data) ------------------
-    all_keys = ("elevation", "slope", "river", "rainfall")
-    default = DEFAULT_WEIGHTS_4
-    w_in = weights or default
-    all_total = sum(w_in.get(k, default[k]) for k in all_keys)
-    if all_total <= 0:
-        raise ValueError("Overlay weights must sum to a positive number.")
-    all_w = {k: w_in.get(k, default[k]) / all_total for k in all_keys}
-
-    score_full = (
-        all_w["elevation"] * np.nan_to_num(elevation_risk)
-        + all_w["slope"] * np.nan_to_num(slope_risk)
-        + all_w["river"] * np.nan_to_num(river_risk)
-        + all_w["rainfall"] * np.nan_to_num(rainfall_risk)
-    )
-
-    # Per-pixel choice: use the 4-criteria score where rainfall has real
-    # data, fall back to the 3-criteria score where it doesn't — instead
-    # of dropping the pixel entirely.
-    rainfall_missing = np.isnan(rainfall_risk)
-    score = np.where(rainfall_missing, score_base, score_full)
-    score[nan_mask] = np.nan
+def combine_scores(scores: dict, weights: dict, required=("elevation", "slope")) -> np.ndarray:
+    """
+    Weighted sum of the criterion scores. At each pixel the weights of the
+    criteria that have data are rescaled to sum to 1, so a gap in one layer
+    does not pull the score down. Pixels missing a required criterion are NaN.
+    """
+    keys = [k for k in scores if weights.get(k, 0) > 0]
+    if not keys:
+        raise ValueError("At least one criterion needs a positive weight.")
+    shape = next(iter(scores.values())).shape
+    total = np.zeros(shape)
+    weight_sum = np.zeros(shape)
+    for k in keys:
+        s = scores[k]
+        ok = ~np.isnan(s)
+        total[ok] += weights[k] * s[ok]
+        weight_sum[ok] += weights[k]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        score = total / weight_sum
+    score[weight_sum == 0] = np.nan
+    for k in required:
+        if k in scores:
+            score[np.isnan(scores[k])] = np.nan
     return score
+
+
+def weighted_overlay(elevation_risk: np.ndarray, slope_risk: np.ndarray,
+                     river_risk: np.ndarray, weights: dict | None = None,
+                     rainfall_risk: np.ndarray | None = None) -> np.ndarray:
+    scores = {"elevation": elevation_risk, "slope": slope_risk, "river": river_risk}
+    default = DEFAULT_WEIGHTS_3
+    if rainfall_risk is not None:
+        scores["rainfall"] = rainfall_risk
+        default = DEFAULT_WEIGHTS_4
+    w = {k: (weights or default).get(k, default[k]) for k in scores}
+    if sum(w.values()) <= 0:
+        raise ValueError("Overlay weights must sum to a positive number.")
+    return combine_scores(scores, w, required=("elevation", "slope", "river"))
+
+
+def natural_breaks(score: np.ndarray, n_sample: int = 2000, seed: int = 0) -> tuple[float, float]:
+    """
+    Jenks natural breaks for three classes, fitted on a random sample of the
+    scores. Returns (medium_cut, high_cut) for classify_risk.
+    """
+    v = score[~np.isnan(score)]
+    if v.size < 3:
+        return 0.4, 0.7
+    rng = np.random.default_rng(seed)
+    v = np.sort(rng.choice(v, size=min(n_sample, v.size), replace=False))
+    n = v.size
+    c1 = np.concatenate([[0.0], np.cumsum(v)])
+    c2 = np.concatenate([[0.0], np.cumsum(v * v)])
+
+    def ssd(a, b):
+        cnt = b - a
+        return c2[b] - c2[a] - (c1[b] - c1[a]) ** 2 / cnt
+
+    best, breaks = np.inf, (0.4, 0.7)
+    for i in range(1, n - 1):
+        j = np.arange(i + 1, n)
+        cost = ssd(0, i) + ssd(i, j) + ssd(j, n)
+        k = int(np.argmin(cost))
+        if cost[k] < best:
+            best, breaks = cost[k], (v[i], v[j[k] - 1])
+    return float(breaks[0]), float(breaks[1])
 
 
 def classify_risk(score: np.ndarray, high_cut: float = 0.7, medium_cut: float = 0.4) -> np.ndarray:
@@ -101,6 +106,17 @@ def classify_risk(score: np.ndarray, high_cut: float = 0.7, medium_cut: float = 
     zones[medium] = 2
     zones[high] = 3
     return zones
+
+
+def majority_filter(zones: np.ndarray, size: int = 5) -> np.ndarray:
+    """Replace each zone pixel with the most common zone in a size x size window (NoData kept)."""
+    from scipy.ndimage import uniform_filter
+
+    counts = np.stack([uniform_filter((zones == z).astype("float32"), size=size, mode="nearest")
+                       for z in (1, 2, 3)])
+    smoothed = (np.argmax(counts, axis=0) + 1).astype("uint8")
+    smoothed[zones == 0] = 0
+    return smoothed
 
 
 ZONE_LABELS = {0: "NoData", 1: "Low", 2: "Medium", 3: "High"}

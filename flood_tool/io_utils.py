@@ -37,6 +37,37 @@ class Grid:
     def shape(self):
         return (self.height, self.width)
 
+    @property
+    def bounds(self):
+        left, top = self.transform.c, self.transform.f
+        return (left, top + self.transform.e * self.height, left + self.transform.a * self.width, top)
+
+    @property
+    def resolution(self):
+        return abs(self.transform.a)
+
+
+def grid_from_aoi(aoi: gpd.GeoDataFrame, resolution: float | None = None,
+                  max_pixels: int = 5_000_000) -> Grid:
+    """Grid covering the AOI bounds, snapped to the resolution."""
+    minx, miny, maxx, maxy = aoi.total_bounds
+    if resolution is None:
+        area = (maxx - minx) * (maxy - miny)
+        resolution = max(30.0, float(np.ceil(np.sqrt(area / max_pixels))))
+    left = np.floor(minx / resolution) * resolution
+    top = np.ceil(maxy / resolution) * resolution
+    width = int(np.ceil((maxx - left) / resolution))
+    height = int(np.ceil((top - miny) / resolution))
+    transform = rasterio.Affine(resolution, 0, left, 0, -resolution, top)
+    return Grid(transform=transform, width=width, height=height, crs=aoi.crs)
+
+
+def aoi_mask(aoi: gpd.GeoDataFrame, grid: Grid) -> np.ndarray:
+    from rasterio.features import rasterize
+
+    shapes = [(g, 1) for g in aoi.geometry if g is not None and not g.is_empty]
+    return rasterize(shapes, out_shape=grid.shape, transform=grid.transform, fill=0, dtype="uint8") > 0
+
 
 def suggest_utm_crs(gdf: gpd.GeoDataFrame) -> str:
     """Pick a metre-based UTM CRS appropriate for the AOI centroid."""
@@ -49,11 +80,13 @@ def suggest_utm_crs(gdf: gpd.GeoDataFrame) -> str:
     return f"EPSG:{epsg}"
 
 
-def load_aoi(aoi_path: str, target_crs: str | None = None) -> gpd.GeoDataFrame:
-    """Load the AOI boundary and reproject to a metre-based CRS."""
-    aoi = gpd.read_file(aoi_path)
+def load_aoi(aoi_path, target_crs: str | None = None) -> gpd.GeoDataFrame:
+    """Load the AOI boundary (path or GeoDataFrame) and reproject to a metre-based CRS."""
+    aoi = aoi_path.copy() if isinstance(aoi_path, gpd.GeoDataFrame) else gpd.read_file(aoi_path)
     if aoi.empty:
-        raise ValueError(f"AOI file '{aoi_path}' contains no features.")
+        raise ValueError("The AOI contains no features.")
+    if aoi.crs is None:
+        aoi = aoi.set_crs(4326)
     if target_crs is None:
         target_crs = suggest_utm_crs(aoi)
     aoi = aoi.to_crs(target_crs)
