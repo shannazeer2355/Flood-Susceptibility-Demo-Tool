@@ -16,6 +16,7 @@ def _grid():
 
 def _tiff_bytes(value):
     data = np.full((60, 60), value, dtype="int16")
+    data[:, 26:] = 0
     profile = dict(driver="GTiff", width=60, height=60, count=1, dtype="int16", crs="EPSG:4326",
                    transform=from_bounds(76.7, 8.4, 77.0, 8.8, 60, 60), nodata=-32768)
     with MemoryFile() as mem:
@@ -29,7 +30,8 @@ def test_clay_from_wcs_in_percent():
     response.raise_for_status.return_value = None
     with mock.patch.object(sources.requests.Session, "get", return_value=response) as get:
         clay = sources.fetch_clay(_grid())
-    assert np.nanmean(clay) == pytest.approx(35.0)
+    assert np.nanmin(clay) == pytest.approx(35.0)
+    assert np.isnan(clay).any()
     params = dict(get.call_args.kwargs["params"])
     assert params["COVERAGEID"] == "clay_5-15cm_mean"
 
