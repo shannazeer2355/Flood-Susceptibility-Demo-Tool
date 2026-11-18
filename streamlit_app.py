@@ -128,9 +128,9 @@ with st.sidebar:
                 "Sample region", list(available_regions.keys()),
             )
             region = available_regions[selected_region_name]
-            st.success(f"{selected_region_name} selected — real SRTM elevation and OpenStreetMap water body data.")
+            st.success(f"{selected_region_name} selected — SRTM elevation and surface-water polygons.")
             if region.get("rainfall") and os.path.exists(region["rainfall"]):
-                st.caption("✓ Rainfall climatology also available for this region.")
+                st.caption("✓ CHIRPS monsoon rainfall (Jun–Sep mean) also available for this region.")
 
     st.divider()
     st.header("2. Upload Data")

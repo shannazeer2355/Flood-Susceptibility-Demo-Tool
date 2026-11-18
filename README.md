@@ -118,6 +118,21 @@ download every output.
 | `flood_susceptibility_map.png` | Static map with projected coordinates, scale bar and legend |
 | `interactive_map.html` | Leaflet map on an OpenStreetMap basemap |
 
+## Sample data
+
+The two bundled districts were prepared in Google Earth Engine:
+
+| Layer | Source |
+|---|---|
+| Boundary | Kerala district boundary with Local Government Directory (LGD) codes |
+| DEM | SRTM 1 arc-second, ~30 m (Farr et al., 2007) |
+| Water | Surface-water mask converted to polygons: 30 m for Thiruvananthapuram, 90 m for Ernakulam |
+| Rainfall | CHIRPS v2.0, 0.05° / ~5.5 km (Funk et al., 2015): mean June–September total |
+
+- Farr, T. G. et al. (2007). The Shuttle Radar Topography Mission. *Reviews of Geophysics*, 45, RG2004.
+- Funk, C. et al. (2015). The climate hazards infrared precipitation with stations — a new
+  environmental record for monitoring extremes. *Scientific Data*, 2, 150066.
+
 ## Project structure
 
 ```
@@ -163,7 +178,8 @@ every push through GitHub Actions.
 - **Not yet validated.** The natural next step is to compare the zones with mapped flood
   extents, such as the August 2018 Kerala floods, and report accuracy (e.g. ROC/AUC).
 - **Input resolution.** SRTM's vertical error is a few metres, which matters on flat
-  coastal plains, and the ~5 km rainfall grid cannot resolve local rainfall differences.
+  coastal plains, the ~5 km rainfall grid cannot resolve local rainfall differences, and
+  the 90 m water layer for Ernakulam misses narrow channels.
 
 ## Possible extensions
 
