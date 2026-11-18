@@ -47,3 +47,37 @@ def test_natural_breaks_separates_clusters():
     x = np.concatenate([rng.normal(0.2, 0.02, 400), rng.normal(0.5, 0.02, 400), rng.normal(0.8, 0.02, 400)])
     medium, high = overlay.natural_breaks(x)
     assert 0.3 < medium < 0.45 and 0.55 < high < 0.7
+
+
+def test_majority_filter_removes_isolated_pixels():
+    zones = np.full((9, 9), 1, dtype="uint8")
+    zones[4, 4] = 3
+    zones[0, :] = 0
+    out = overlay.majority_filter(zones, 3)
+    assert out[4, 4] == 1
+    assert (out[0] == 0).all()
+
+
+def test_log_scaled_elevation_spreads_low_ground():
+    from flood_tool import terrain
+
+    elev = np.array([[0.0, 10.0, 100.0, 1000.0]])
+    mask = np.ones_like(elev, dtype=bool)
+    linear = terrain.elevation_risk_score(elev, mask)
+    log = terrain.elevation_risk_score(elev, mask, log_scale=True)
+    assert linear[0, 0] - linear[0, 1] < 0.02
+    assert log[0, 0] - log[0, 1] > 0.2
+    assert log[0, 0] == pytest.approx(1, abs=0.05) and log[0, 3] == pytest.approx(0, abs=0.05)
+
+
+def test_major_water_excludes_streams_and_ponds():
+    from shapely.geometry import box
+
+    from flood_tool.open_data import major_water
+
+    gdf = gpd.GeoDataFrame({
+        "kind": ["waterway", "waterway", "water", "water"],
+        "type": ["river", "stream", "pond", "lake"],
+    }, geometry=[LineString([(0, 0), (1, 1)]), LineString([(0, 0), (1, 1)]),
+                 box(0, 0, 50, 50), box(0, 0, 500, 500)], crs="EPSG:32643")
+    assert major_water(gdf)["type"].tolist() == ["river", "lake"]
