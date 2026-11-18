@@ -108,5 +108,16 @@ def classify_risk(score: np.ndarray, high_cut: float = 0.7, medium_cut: float = 
     return zones
 
 
+def majority_filter(zones: np.ndarray, size: int = 5) -> np.ndarray:
+    """Replace each zone pixel with the most common zone in a size x size window (NoData kept)."""
+    from scipy.ndimage import uniform_filter
+
+    counts = np.stack([uniform_filter((zones == z).astype("float32"), size=size, mode="nearest")
+                       for z in (1, 2, 3)])
+    smoothed = (np.argmax(counts, axis=0) + 1).astype("uint8")
+    smoothed[zones == 0] = 0
+    return smoothed
+
+
 ZONE_LABELS = {0: "NoData", 1: "Low", 2: "Medium", 3: "High"}
 ZONE_COLORS = {1: "#2ecc71", 2: "#f1c40f", 3: "#e74c3c"}

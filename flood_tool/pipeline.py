@@ -127,8 +127,11 @@ def score_open_data(stack, out_dir: str = "outputs", judgements: dict | None = N
                     criteria=None, classification: str = "natural_breaks",
                     settlements_path: str | None = None, river_near_m: float = 500.0,
                     river_far_m: float = 1500.0, max_slope_cutoff_deg: float = 15.0,
-                    drainage_radius_m: float = 1000.0) -> dict:
-    """Score, weight (AHP), classify and map a fetched LayerStack."""
+                    drainage_radius_m: float = 1000.0, smoothing: int = 5) -> dict:
+    """
+    Score, weight (AHP), classify and map a fetched LayerStack. smoothing is
+    the window (pixels) of the majority filter applied to the zones; 0 or 1 disables it.
+    """
     os.makedirs(out_dir, exist_ok=True)
     scores = open_data.criterion_scores(stack, river_near_m, river_far_m,
                                         max_slope_cutoff_deg, drainage_radius_m)
@@ -145,6 +148,8 @@ def score_open_data(stack, out_dir: str = "outputs", judgements: dict | None = N
     else:
         medium_cut, high_cut = 0.4, 0.7
     zones = overlay.classify_risk(score, high_cut=high_cut, medium_cut=medium_cut)
+    if smoothing and smoothing > 1:
+        zones = overlay.majority_filter(zones, smoothing)
 
     result = write_outputs(zones, stack.grid, stack.aoi, out_dir, settlements_path)
     criteria_png = os.path.join(out_dir, "criteria_scores.png")

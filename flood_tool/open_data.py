@@ -29,6 +29,9 @@ SOURCES = {
 
 OPTIONAL_LAYERS = ("osm", "jrc", "rainfall", "landcover", "soil")
 
+MAJOR_WATERWAYS = ("river", "canal")
+MIN_WATER_BODY_M2 = 50_000
+
 
 @dataclass
 class LayerStack:
@@ -101,12 +104,19 @@ def fetch_layers(aoi, resolution: float | None = None, layers=OPTIONAL_LAYERS, p
     return stack
 
 
+def major_water(waterways: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Rivers, canals and water bodies of at least 5 ha; small streams, drains and ponds are left out."""
+    lines = (waterways["kind"] == "waterway") & waterways["type"].isin(MAJOR_WATERWAYS)
+    bodies = (waterways["kind"] == "water") & (waterways.geometry.area >= MIN_WATER_BODY_M2)
+    return waterways[lines | bodies]
+
+
 def water_raster(stack: LayerStack) -> np.ndarray | None:
     parts = []
     if stack.waterways is not None and len(stack.waterways):
-        shapes = [(g, 1) for g in stack.waterways.geometry if g is not None and not g.is_empty]
-        if shapes:
-            parts.append(river_distance.rasterize_rivers(stack.waterways, stack.grid) > 0)
+        major = major_water(stack.waterways)
+        if len(major):
+            parts.append(river_distance.rasterize_rivers(major, stack.grid) > 0)
     if stack.water is not None:
         parts.append(stack.water)
     if not parts:
@@ -118,7 +128,7 @@ def criterion_scores(stack: LayerStack, river_near_m: float = 500.0, river_far_m
                      max_slope_cutoff_deg: float = 15.0, drainage_radius_m: float = 1000.0) -> dict:
     grid, mask = stack.grid, stack.mask
     scores = {
-        "elevation": terrain.elevation_risk_score(stack.elevation, mask).astype("float32"),
+        "elevation": terrain.elevation_risk_score(stack.elevation, mask, log_scale=True).astype("float32"),
     }
     slope = terrain.compute_slope_degrees(stack.elevation, grid.resolution, grid.resolution, nodata=grid.nodata)
     scores["slope"] = terrain.slope_risk_score(slope, mask, max_slope_cutoff=max_slope_cutoff_deg).astype("float32")

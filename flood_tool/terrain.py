@@ -9,8 +9,12 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 
 
-def elevation_risk_score(elevation: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Lower ground -> higher score (1st-99th percentile normalisation)."""
+def elevation_risk_score(elevation: np.ndarray, mask: np.ndarray, log_scale: bool = False) -> np.ndarray:
+    """
+    Lower ground -> higher score (1st-99th percentile normalisation).
+    log_scale stretches the low end, so differences of a few metres on a
+    coastal plain still count when the AOI also contains high hills.
+    """
     elev = elevation.astype("float64")
     valid = elev[mask]
     if valid.size == 0:
@@ -20,7 +24,11 @@ def elevation_risk_score(elevation: np.ndarray, mask: np.ndarray) -> np.ndarray:
     if e_max <= e_min:
         e_max = e_min + 1e-6
 
-    norm = np.clip((elev - e_min) / (e_max - e_min), 0, 1)
+    if log_scale:
+        norm = np.log1p(np.clip(elev - e_min, 0, None)) / np.log1p(e_max - e_min)
+        norm = np.clip(norm, 0, 1)
+    else:
+        norm = np.clip((elev - e_min) / (e_max - e_min), 0, 1)
     risk = 1.0 - norm
 
     out = np.full(elevation.shape, np.nan, dtype="float64")
