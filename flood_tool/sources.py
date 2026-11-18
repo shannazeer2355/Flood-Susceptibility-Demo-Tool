@@ -10,18 +10,21 @@ needs an API key.
     ESA WorldCover 2021         Microsoft Planetary Computer (STAC)
     JRC Global Surface Water    Microsoft Planetary Computer (STAC)
     OpenStreetMap waterways     Overpass API
-    SoilGrids 2.0 clay content  ISRIC
+    SoilGrids 2.0 clay content  ISRIC (WCS)
     CHELSA V2.1 precipitation   CHELSA (1981-2010 monthly climatology)
 """
 from __future__ import annotations
 
 import logging
 import math
+import os
+import tempfile
 from functools import lru_cache
 
 import geopandas as gpd
 import numpy as np
 import rasterio
+import rasterio.errors
 import requests
 from rasterio.warp import Resampling, reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
@@ -40,6 +43,7 @@ OVERPASS_URLS = (
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 )
 
+SOILGRIDS_WCS = "https://maps.isric.org/mapserv?map=/map/{prop}.map"
 SOILGRIDS_URL = "/vsicurl/https://files.isric.org/soilgrids/latest/data/{prop}/{prop}_{depth}_mean.vrt"
 CHELSA_URL = (
     "/vsicurl/https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies/1981-2010/pr/"
@@ -167,9 +171,34 @@ def fetch_surface_water(grid, min_occurrence: float = 50.0) -> np.ndarray:
     return np.nan_to_num(occ, nan=0.0) >= min_occurrence
 
 
+def _soilgrids_wcs(prop: str, depth: str, grid) -> np.ndarray:
+    w, s, e, n = wgs84_bounds(grid, 0.01)
+    params = [
+        ("SERVICE", "WCS"), ("VERSION", "2.0.1"), ("REQUEST", "GetCoverage"),
+        ("COVERAGEID", f"{prop}_{depth}_mean"), ("FORMAT", "image/tiff"),
+        ("SUBSET", f"long({w},{e})"), ("SUBSET", f"lat({s},{n})"),
+        ("SUBSETTINGCRS", "http://www.opengis.net/def/crs/EPSG/0/4326"),
+        ("OUTPUTCRS", "http://www.opengis.net/def/crs/EPSG/0/4326"),
+    ]
+    r = _session().get(SOILGRIDS_WCS.format(prop=prop), params=params, timeout=60)
+    r.raise_for_status()
+    if not r.headers.get("content-type", "").startswith("image/tiff"):
+        raise ValueError(f"SoilGrids WCS returned {r.headers.get('content-type')}: {r.text[:200]}")
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as f:
+        f.write(r.content)
+    try:
+        return read_to_grid(f.name, grid, Resampling.bilinear)
+    finally:
+        os.remove(f.name)
+
+
 def fetch_clay(grid, depth: str = "5-15cm") -> np.ndarray:
-    """Clay content (%) from SoilGrids 2.0."""
-    clay = read_to_grid(SOILGRIDS_URL.format(prop="clay", depth=depth), grid, Resampling.bilinear)
+    """Clay content (%) from SoilGrids 2.0: one WCS request, or the tiled VRT if that fails."""
+    try:
+        clay = _soilgrids_wcs("clay", depth, grid)
+    except (requests.RequestException, ValueError, rasterio.errors.RasterioError) as exc:
+        logger.warning("SoilGrids WCS failed (%s); reading the tiled VRT instead", exc)
+        clay = read_to_grid(SOILGRIDS_URL.format(prop="clay", depth=depth), grid, Resampling.bilinear)
     clay[clay <= 0] = np.nan
     return clay / 10.0
 
