@@ -11,8 +11,8 @@ import os
 import shutil
 import tempfile
 import traceback
+from pathlib import Path
 
-import pandas as pd
 import rasterio
 import streamlit as st
 import streamlit.components.v1 as components
@@ -191,7 +191,7 @@ with st.sidebar:
     river_near = st.number_input("High susceptibility within (m)", value=500, step=50)
     river_far = st.number_input("Low susceptibility beyond (m)", value=1500, step=50)
 
-    run_btn = st.button("🚀 Generate Flood Susceptibility Map", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Generate Flood Susceptibility Map", type="primary", width="stretch")
 
     st.divider()
     st.markdown("### 📩 Questions or Issues?")
@@ -249,18 +249,21 @@ if run_btn:
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     st.subheader("Interactive Map")
-                    with open(result["interactive_map"], "r", encoding="utf-8") as f:
-                        components.html(f.read(), height=550, scrolling=False)
+                    if hasattr(st, "iframe"):
+                        st.iframe(Path(result["interactive_map"]), height=550)
+                    else:
+                        with open(result["interactive_map"], "r", encoding="utf-8") as f:
+                            components.html(f.read(), height=550, scrolling=False)
 
                 with col2:
                     st.subheader("Area by Susceptibility Zone")
-                    st.dataframe(result["area_stats"], use_container_width=True, hide_index=True)
+                    st.dataframe(result["area_stats"], width="stretch", hide_index=True)
                     if result["settlement_stats"] is not None:
                         st.subheader("Settlements in Each Susceptibility Zone")
-                        st.dataframe(result["settlement_stats"], use_container_width=True, hide_index=True)
+                        st.dataframe(result["settlement_stats"], width="stretch", hide_index=True)
 
                 st.subheader("Static Map")
-                st.image(result["static_map"], use_container_width=True)
+                st.image(result["static_map"], width="stretch")
 
                 st.subheader("Downloads")
                 dl_cols = st.columns(4)

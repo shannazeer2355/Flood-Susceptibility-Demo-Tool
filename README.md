@@ -1,141 +1,185 @@
-# 🌊 Flood Risk Mapping Tool
+# Flood Susceptibility Demo Tool
 
-A Python GIS pipeline that generates **Flood Risk Zone maps (High / Medium / Low)** from a Digital Elevation Model (DEM), slope, and distance-to-river layers, using a weighted overlay method.
+[![tests](https://github.com/shannazeer2355/Flood-Susceptibility-Demo-Tool/actions/workflows/tests.yml/badge.svg)](https://github.com/shannazeer2355/Flood-Susceptibility-Demo-Tool/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Live app](https://img.shields.io/badge/live%20app-Streamlit-ff4b4b)](https://floodsusceptibility-by-shan.streamlit.app)
 
-Developed during a GIS internship at Avakara GeoScience Research Technologies (AGSRT) for multi-criteria flood susceptibility assessment in Alappuzha District, Kerala. Workflow: elevation + slope + river proximity → weighted score → classified risk map → statistics → static & interactive visualisation.
+A Python GIS pipeline that maps **flood susceptibility (High / Medium / Low)** from a
+digital elevation model, distance to rivers and water bodies, and, optionally,
+long-term monsoon rainfall, using a multi-criteria weighted overlay. It runs as a
+command-line tool or as a [Streamlit web app](https://floodsusceptibility-by-shan.streamlit.app).
 
-**Live app:** https://floodsusceptibility-by-shan.streamlit.app
+Developed during a GIS internship at Avakara GeoScience Research Technologies (AGSRT),
+Thiruvananthapuram, for flood susceptibility assessment in Kerala.
 
-![sample output](outputs/flood_risk_map.png)
+![Example output for Thiruvananthapuram district](docs/example_trivandrum.png)
 
-## Contents
+*Thiruvananthapuram district with all four criteria (bundled sample data).*
 
-```
-flood-risk-tool/
-├── flood_tool.py            # CLI entry point
-├── streamlit_app.py         # Optional GUI dashboard
-├── flood_tool/               # Core package
-│   ├── io_utils.py           # AOI/DEM loading, clipping, reprojection
-│   ├── terrain.py             # Elevation + slope risk scoring
-│   ├── river_distance.py      # Distance-to-river risk scoring
-│   ├── overlay.py             # Weighted overlay + classification
-│   ├── outputs.py             # GeoTIFF / GeoJSON writers
-│   ├── reporting.py           # Area & settlement statistics
-│   └── visualize.py           # Matplotlib + folium maps
-├── sample_data/
-│   └── make_sample_data.py   # Generates a synthetic demo dataset
-├── outputs/                   # Generated results land here
-└── requirements.txt
-```
+## Method
 
-## Methodology
+Each criterion is converted to a 0–1 score, where 1 means most susceptible:
 
-The tool follows a standard **multi-criteria weighted overlay** approach, a
-well-established GIS method for flood susceptibility mapping:
-
-| Criterion | Rule | Weight |
+| Criterion | Rule | Weight (3 / 4 criteria) |
 |---|---|---|
-| **Elevation** | Lower elevation → higher risk. Elevation is normalised within the AOI (1st–99th percentile) then inverted. | 40% |
-| **Slope** | Flatter terrain drains poorly → higher risk. Slope (degrees) computed with Horn's (1981) 3×3 gradient kernel, same method as `gdaldem slope`, then inverted/normalised against a configurable cutoff (default 15°). | 30% |
-| **Distance to river** | Closer to water → higher risk. A continuous Euclidean distance transform is computed from rasterized river geometries, then mapped through a piecewise-linear curve: ≤500m → 1.0 (high), 500–1500m → linear taper, ≥1500m → 0.0 (low). | 30% |
+| **Elevation** | Lower ground is more susceptible. Elevation is normalised to the AOI's own 1st–99th percentile range, then inverted. | 0.4 / 0.3 |
+| **Slope** | Flatter ground drains more slowly. Slope (Horn 1981, as in `gdaldem slope`) scores 1 at 0° and falls linearly to 0 at a cutoff (default 15°). | 0.3 / 0.2 |
+| **Distance to water** | Closer to rivers and water bodies is more susceptible. Euclidean distance scores 1 within 500 m and falls linearly to 0 at 1500 m. | 0.3 / 0.2 |
+| **Rainfall** *(optional)* | Wetter areas are more susceptible. Long-term monsoon-season mean rainfall, normalised to the AOI's 1st–99th percentile range. | – / 0.3 |
 
-Each criterion is normalised to a **0–1 risk score**, combined as:
+The scores are combined as a weighted sum (weights are normalised to sum to 1):
 
 ```
-Final Score = 0.4 × Elevation Risk + 0.3 × Slope Risk + 0.3 × River-Distance Risk
+score = w_elev·elevation + w_slope·slope + w_water·distance + w_rain·rainfall
 ```
 
-and classified into zones:
+and classified as **High** (> 0.7), **Medium** (0.4–0.7) or **Low** (< 0.4).
+All weights, distances and the slope cutoff can be changed from the command line or
+the app's sliders.
 
-| Score | Zone |
-|---|---|
-| > 0.7 | 🔴 High |
-| 0.4 – 0.7 | 🟡 Medium |
-| < 0.4 | 🟢 Low |
+### Implementation notes
 
-All weights and thresholds are configurable via CLI flags or the Streamlit sliders.
+- **Projection.** Inputs can be in any CRS. The AOI's UTM zone is detected
+  automatically and all layers are reprojected to it, so distances and areas are in metres.
+- **Memory.** Only the window of the DEM that overlaps the AOI is read and reprojected,
+  so large SRTM tiles can be used with small study areas.
+- **Slope at the AOI edge.** Before the slope kernel runs, cells outside the AOI are
+  filled with the *nearest* valid elevation, so no artificial slopes appear along the boundary.
+- **Distance.** The distance transform uses the real pixel width and height, so
+  non-square pixels are measured correctly.
+- **Rainfall.** The coarse rainfall grid (~5 km) is resampled bilinearly, giving a smooth
+  surface instead of 5 km blocks. Where no rainfall value exists, that pixel falls back to
+  the three-criteria score rather than being dropped or given an invented value.
+- **Continuous distance decay.** A linear decay between the 500 m and 1500 m breakpoints
+  avoids the hard edges that fixed buffer rings would create.
 
-**Why a continuous distance decay instead of hard buffer rings?** Hard rings (0–500m,
-500–1500m, >1500m) create blocky, unrealistic discontinuities at the boundary. A
-piecewise-linear function anchored exactly at the requested breakpoints preserves the
-same risk bands while producing a smoother, more defensible surface — the standard
-practice in flood susceptibility literature.
-
-## Installation
+## Quick start
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Requires GDAL under the hood (via `rasterio`/`geopandas`) — on Linux/Mac,
-`pip install rasterio geopandas` typically pulls prebuilt wheels; on Windows,
-consider `conda install -c conda-forge rasterio geopandas` if pip wheels fail.
+`rasterio` and `geopandas` install from pip wheels on Linux and macOS. On Windows, if
+pip fails, use `conda install -c conda-forge rasterio geopandas`.
 
-## Usage — Command Line
+### Command line
+
+Run the bundled Thiruvananthapuram example with rainfall:
 
 ```bash
 python flood_tool.py \
-    --aoi sample_data/boundary.shp \
-    --dem sample_data/dem.tif \
-    --rivers sample_data/rivers.shp \
-    --settlements sample_data/villages.shp \
+    --aoi sample_data/trivandrum/boundary.shp \
+    --dem sample_data/trivandrum/dem.tif \
+    --rivers sample_data/trivandrum/rivers.shp \
+    --rainfall sample_data/trivandrum/rainfall.tif \
     --out-dir outputs
 ```
 
-Optional flags:
+Options:
 
 ```
---w-elevation 0.4      Elevation weight
---w-slope 0.3          Slope weight
---w-river 0.3          River-distance weight
---river-near 500       Distance (m) below which river risk = High
---river-far 1500       Distance (m) beyond which river risk = Low
---max-slope 15         Slope (deg) at/above which slope risk = 0
--v / --verbose         Debug logging
+--rainfall PATH       Optional rainfall raster (adds the 4th criterion)
+--settlements PATH    Optional settlement points, counted per zone
+--w-elevation W       Elevation weight
+--w-slope W           Slope weight
+--w-river W           Distance-to-water weight
+--w-rainfall W        Rainfall weight (needs --rainfall)
+--river-near M        Distance (m) within which the water score is 1   [500]
+--river-far M         Distance (m) beyond which the water score is 0   [1500]
+--max-slope DEG       Slope (deg) at or above which the slope score is 0 [15]
+-v, --verbose         Debug logging
 ```
 
-### No real data yet? Generate a synthetic demo dataset:
+A small synthetic dataset (5 × 4 km, with settlements) is included for quick tests:
 
 ```bash
-python sample_data/make_sample_data.py
 python flood_tool.py --aoi sample_data/boundary.shp --dem sample_data/dem.tif \
     --rivers sample_data/rivers.shp --settlements sample_data/villages.shp
 ```
 
-## Usage — GUI Dashboard (Streamlit)
+### Web app
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
-Upload AOI / DEM / rivers / settlements, tune weights with sliders, and preview
-the interactive map, static map, and statistics tables in-browser, with one-click
-downloads for every output file.
+Upload your own AOI, DEM, rivers and optional rainfall and settlement layers, or pick a
+bundled district. Adjust the weights, view the interactive map and statistics, and
+download every output.
 
 ## Outputs
 
 | File | Description |
 |---|---|
-| `flood_risk.tif` | Classified risk raster (1=Low, 2=Medium, 3=High), GeoTIFF |
-| `flood_risk_zones.geojson` | Risk zones dissolved into polygons, with area (km²) |
-| `summary.csv` | % / km² of AOI per risk zone + settlements affected per zone |
-| `flood_risk_map.png` | Static map (matplotlib) |
-| `interactive_map.html` | Interactive Leaflet/folium map with basemap + legend |
+| `flood_susceptibility.tif` | Classified raster (1 = Low, 2 = Medium, 3 = High, 0 = NoData) |
+| `flood_susceptibility_zones.geojson` | Zones dissolved into polygons, with area in km² |
+| `summary.csv` | Area and share of the AOI per zone, plus settlements per zone |
+| `flood_susceptibility_map.png` | Static map with projected coordinates, scale bar and legend |
+| `interactive_map.html` | Leaflet map on an OpenStreetMap basemap |
 
-## Free Data Sources
+## Project structure
 
-- **DEM**: [SRTM 30m](https://earthexplorer.usgs.gov/) · [OpenTopography](https://opentopography.org/) · ASTER GDEM
-- **Rivers / water bodies**: [OpenStreetMap](https://www.openstreetmap.org/) (via [Overpass Turbo](https://overpass-turbo.eu/) or [HOT Export Tool](https://export.hotosm.org/)) · [HydroSHEDS](https://www.hydrosheds.org/)
-- **Admin boundaries**: [GADM](https://gadm.org/)
-- **Rainfall (bonus)**: [CHIRPS](https://www.chc.ucsb.edu/data/chirps)
+```
+├── flood_tool.py              # Command-line entry point
+├── streamlit_app.py           # Web app
+├── flood_tool/
+│   ├── pipeline.py            # Runs the full workflow
+│   ├── io_utils.py            # Loading, reprojection, clipping, resampling
+│   ├── terrain.py             # Elevation and slope scores
+│   ├── river_distance.py      # Distance-to-water score
+│   ├── rainfall.py            # Rainfall score
+│   ├── overlay.py             # Weighted overlay and classification
+│   ├── outputs.py             # GeoTIFF and GeoJSON writers
+│   ├── reporting.py           # Area and settlement statistics
+│   └── visualize.py           # Static and interactive maps
+├── sample_data/
+│   ├── trivandrum/            # Thiruvananthapuram district
+│   ├── ernakulam/             # Ernakulam district
+│   └── make_sample_data.py    # Generates the synthetic test dataset
+├── tests/                     # pytest suite
+└── docs/                      # Figures used in this README
+```
 
-## Bonus Extensions (for future work)
+## Testing
 
-- Ingest CHIRPS rainfall rasters as a 4th weighted criterion
-- Replace the hand-tuned weighted overlay with a trained classifier (Random Forest /
-  XGBoost) using historical flood-extent points as labels
-- Validate the risk map against a historical flood-points layer (confusion matrix,
-  AUC) to quantify accuracy
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests check each scoring function against known values (for example, the slope of a
+plane with a known gradient and distances on non-square pixels), the weighting and
+classification rules, and a full run on the synthetic dataset. They run automatically on
+every push through GitHub Actions.
+
+## Limitations
+
+- **Susceptibility, not hazard.** The map ranks where flooding is *more likely* from
+  terrain, proximity to water and climate. It does not give flood depth, return period
+  or probability.
+- **Expert-assigned weights.** The weights and class thresholds are not yet calibrated
+  against observed floods, so results depend on these choices.
+- **Not yet validated.** The natural next step is to compare the zones with mapped flood
+  extents, such as the August 2018 Kerala floods, and report accuracy (e.g. ROC/AUC).
+- **Input resolution.** SRTM's vertical error is a few metres, which matters on flat
+  coastal plains, and the ~5 km rainfall grid cannot resolve local rainfall differences.
+
+## Possible extensions
+
+- Validate against a flood inventory or Sentinel-1 SAR flood extents.
+- Derive weights with the Analytic Hierarchy Process (AHP), or learn them with a
+  Random Forest trained on historical flood points.
+- Add land cover, soil and drainage density as further criteria.
+
+## Citation
+
+If you use this tool, please cite it using the metadata in [CITATION.cff](CITATION.cff).
+
+## Author
+
+**Mohammed Shan N**: [ORCID 0009-0007-5645-6313](https://orcid.org/0009-0007-5645-6313) ·
+[LinkedIn](https://www.linkedin.com/in/mohammed-shan-n-5562051ab) · shangeography@gmail.com
 
 ## License
 
