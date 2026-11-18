@@ -273,10 +273,10 @@ if run_btn:
             layers = tuple(sorted({src for k in criteria for src in OPEN_LAYERS.get(k, ())}))
             stack_key = (aoi_key, resolution, layers)
             if st.session_state.get("stack_key") != stack_key:
-                bar = st.progress(0.0, text="Fetching layers...")
+                bar = st.progress(0.0, text="Fetching elevation...")
 
                 def progress(done, total, label):
-                    bar.progress(done / total, text=f"Fetching: {label}" if label != "done" else "Layers ready")
+                    bar.progress(done / total, text=f"Layers ready: {done} of {total} (last: {label})")
 
                 st.session_state.stack = open_data.fetch_layers(aoi, resolution=resolution, layers=layers,
                                                                 progress=progress)
