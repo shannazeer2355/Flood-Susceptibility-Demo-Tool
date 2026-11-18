@@ -1,8 +1,8 @@
 """
 overlay.py
 ----------
-Combine individual 0-1 risk layers into a single weighted flood-risk
-score, and classify that score into High / Medium / Low zones.
+Combine the individual 0-1 criterion scores into a single weighted
+flood-susceptibility score, and classify it into High / Medium / Low zones.
 
 Two modes:
   * 3-criteria (default, backward compatible):
@@ -16,13 +16,10 @@ Rainfall is optional so existing 3-criteria runs (and previously
 published results, e.g. the Alappuzha case study) remain reproducible
 exactly as before when no rainfall layer is provided.
 
-Per-pixel fallback: where a rainfall value legitimately doesn't exist
-for a pixel (outside the rainfall source's coverage), that PIXEL uses
-the 3-criteria score instead of being dropped entirely. Weights are
-renormalised to sum to 1 in whichever mode applies, at the same
-relative ratio the caller specified. No pixel ever receives a
-fabricated/interpolated rainfall value — only real data is used,
-just at whatever combination of layers is actually available there.
+Per-pixel fallback: where a pixel has no rainfall value (outside the
+rainfall source's coverage), that pixel uses the 3-criteria score
+instead of being dropped. Weights are renormalised to sum to 1 in
+whichever mode applies, at the same relative ratio the caller specified.
 
 Classification thresholds:
     score > 0.7        -> High
