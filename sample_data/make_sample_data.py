@@ -6,6 +6,7 @@ villages) so the tool can be run and demoed without needing to
 download real SRTM/OSM data first.
 """
 import os
+import sys
 
 import geopandas as gpd
 import numpy as np
@@ -13,7 +14,8 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon, LineString, Point
 
-OUT = os.path.dirname(__file__)
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+os.makedirs(OUT, exist_ok=True)
 CRS = "EPSG:32643"  # UTM 43N (arbitrary, works fine for a synthetic demo)
 
 # --- AOI boundary: 5km x 4km rectangle -----------------------------------

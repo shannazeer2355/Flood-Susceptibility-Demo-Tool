@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 import os
 
+from rasterio.warp import Resampling
+
 from . import io_utils, terrain, river_distance, rainfall as rainfall_mod, overlay, outputs, reporting, visualize
 
 logger = logging.getLogger(__name__)
@@ -37,35 +39,30 @@ def run_pipeline(
     mask = io_utils.valid_mask(elevation, grid.nodata)
 
     # --- Step 2: Elevation risk --------------------------------------------------
-    logger.info("Step 2/%d: Scoring elevation risk...", total_steps)
+    logger.info("Step 2/%d: Scoring elevation...", total_steps)
     elevation_risk = terrain.elevation_risk_score(elevation, mask)
 
     # --- Step 3: Slope risk -------------------------------------------------------
-    logger.info("Step 3/%d: Computing slope and scoring slope risk...", total_steps)
+    logger.info("Step 3/%d: Computing and scoring slope...", total_steps)
     px_x, px_y = abs(grid.transform.a), abs(grid.transform.e)
     slope_deg = terrain.compute_slope_degrees(elevation, px_x, px_y, nodata=grid.nodata)
     slope_risk = terrain.slope_risk_score(slope_deg, mask, max_slope_cutoff=max_slope_cutoff_deg)
 
     # --- Step 4: River distance risk ---------------------------------------------
-    logger.info("Step 4/%d: Rasterizing rivers and scoring distance risk...", total_steps)
+    logger.info("Step 4/%d: Rasterizing rivers and scoring distance to water...", total_steps)
     rivers = io_utils.load_vector_on_grid(rivers_path, grid)
     river_raster = river_distance.rasterize_rivers(rivers, grid)
-    dist_m = river_distance.distance_to_rivers(river_raster, pixel_size=(px_x + px_y) / 2)
+    dist_m = river_distance.distance_to_rivers(river_raster, pixel_size=(px_y, px_x))
     river_risk = river_distance.river_distance_risk_score(dist_m, mask, near=river_near_m, far=river_far_m)
 
     # --- Step 4b (optional): Rainfall risk -----------------------------------------
     rainfall_risk = None
     step = 5
     if rainfall_path:
-        logger.info("Step %d/%d: Resampling rainfall and scoring rainfall risk...", step, total_steps)
-        # 'nearest' instead of the default 'bilinear': bilinear requires all
-        # 4 surrounding source pixels to be valid, so a single nodata
-        # neighbour near the source raster's coverage edge produces a
-        # nodata destination pixel even when nearby real data exists.
-        # 'nearest' uses only the closest source pixel, recovering those
-        # edge cells without inventing any new information.
-        from rasterio.warp import Resampling
-        rainfall_arr = io_utils.resample_raster_to_grid(rainfall_path, grid, resampling=Resampling.nearest)
+        logger.info("Step %d/%d: Resampling and scoring rainfall...", step, total_steps)
+        rainfall_arr = io_utils.resample_raster_to_grid(
+            rainfall_path, grid, resampling=Resampling.bilinear, extend_edges=True
+        )
         rainfall_mask = mask & (rainfall_arr != grid.nodata)
 
         n_gaps = int((mask & (rainfall_arr == grid.nodata)).sum())
@@ -87,8 +84,8 @@ def run_pipeline(
 
     # --- Step 6/7: Write outputs ------------------------------------------------------
     logger.info("Step %d/%d: Writing GeoTIFF / GeoJSON / summary.csv...", step, total_steps)
-    raster_path = os.path.join(out_dir, "flood_risk.tif")
-    geojson_path = os.path.join(out_dir, "flood_risk_zones.geojson")
+    raster_path = os.path.join(out_dir, "flood_susceptibility.tif")
+    geojson_path = os.path.join(out_dir, "flood_susceptibility_zones.geojson")
     summary_path = os.path.join(out_dir, "summary.csv")
 
     outputs.write_raster(zones, grid, raster_path)
@@ -103,7 +100,7 @@ def run_pipeline(
 
     # --- Step 7/8: Visualization --------------------------------------------------
     logger.info("Step %d/%d: Rendering static and interactive maps...", step, total_steps)
-    static_map_path = os.path.join(out_dir, "flood_risk_map.png")
+    static_map_path = os.path.join(out_dir, "flood_susceptibility_map.png")
     interactive_map_path = os.path.join(out_dir, "interactive_map.html")
 
     visualize.plot_static_map(zones, grid, static_map_path)

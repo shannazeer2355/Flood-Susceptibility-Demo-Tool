@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Flood Susceptibility Demo Tool"
+version: 1.2.0
+date-released: 2026-11-18
+license: MIT
+repository-code: "https://github.com/shannazeer2355/Flood-Susceptibility-Demo-Tool"
+url: "https://floodsusceptibility-by-shan.streamlit.app"
+authors:
+  - family-names: "N"
+    given-names: "Mohammed Shan"
+    orcid: "https://orcid.org/0009-0007-5645-6313"

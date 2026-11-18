@@ -153,25 +153,44 @@ def clip_and_reproject_dem(dem_path: str, aoi: gpd.GeoDataFrame, resolution: flo
     return elevation, grid
 
 
-def resample_raster_to_grid(raster_path: str, grid: Grid, resampling: Resampling = Resampling.bilinear) -> np.ndarray:
+def resample_raster_to_grid(raster_path: str, grid: Grid, resampling: Resampling = Resampling.bilinear,
+                            extend_edges: bool = False) -> np.ndarray:
     """
-    Reproject/resample any single-band raster (e.g. rainfall) so it lines
-    up pixel-for-pixel with an already-established reference Grid (the
-    same grid the DEM was clipped to). Returns an array of shape grid.shape.
+    Resample a single-band raster (e.g. rainfall) onto the reference grid.
+    extend_edges: fill one ring of missing cells around valid data with the
+    nearest value before resampling.
     """
     with rasterio.open(raster_path) as src:
-        dst_array = np.full(grid.shape, grid.nodata, dtype="float32")
-        reproject(
-            source=rasterio.band(src, 1),
-            destination=dst_array,
-            src_transform=src.transform,
-            src_crs=src.crs,
-            dst_transform=grid.transform,
-            dst_crs=grid.crs,
-            dst_nodata=grid.nodata,
-            resampling=resampling,
-        )
-    return dst_array
+        src_data = src.read(1).astype("float64")
+        src_transform = src.transform
+        src_crs = src.crs
+        if src.nodata is not None:
+            src_data[src_data == src.nodata] = np.nan
+
+    if extend_edges:
+        src_data = np.pad(src_data, 1, mode="constant", constant_values=np.nan)
+        src_transform = src_transform * rasterio.Affine.translation(-1, -1)
+        missing = np.isnan(src_data)
+        if missing.any() and not missing.all():
+            from scipy.ndimage import distance_transform_edt
+            dist, idx = distance_transform_edt(missing, return_indices=True)
+            ring = missing & (dist < 1.5)
+            src_data[ring] = src_data[tuple(i[ring] for i in idx)]
+
+    dst_array = np.full(grid.shape, np.nan, dtype="float64")
+    reproject(
+        source=src_data,
+        destination=dst_array,
+        src_transform=src_transform,
+        src_crs=src_crs,
+        src_nodata=np.nan,
+        dst_transform=grid.transform,
+        dst_crs=grid.crs,
+        dst_nodata=np.nan,
+        resampling=resampling,
+    )
+    dst_array[np.isnan(dst_array)] = grid.nodata
+    return dst_array.astype("float32")
 
 
 def load_vector_on_grid(path: str, grid: Grid) -> gpd.GeoDataFrame:

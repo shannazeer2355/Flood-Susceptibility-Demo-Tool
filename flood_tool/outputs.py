@@ -1,8 +1,8 @@
 """
 outputs.py
 ----------
-Write final results to disk: risk raster (GeoTIFF) and risk polygons
-(GeoJSON).
+Write final results to disk: susceptibility raster (GeoTIFF) and
+susceptibility zone polygons (GeoJSON).
 """
 from __future__ import annotations
 
@@ -35,10 +35,10 @@ def polygonize_zones(zones: np.ndarray, grid, out_path: str) -> gpd.GeoDataFrame
     mask = zones > 0
     records = []
     for geom, value in rio_shapes(zones, mask=mask, transform=grid.transform):
-        records.append({"geometry": shape(geom), "risk_zone": ZONE_LABELS[int(value)]})
+        records.append({"geometry": shape(geom), "susceptibility_zone": ZONE_LABELS[int(value)]})
 
     gdf = gpd.GeoDataFrame(records, crs=grid.crs)
-    gdf = gdf.dissolve(by="risk_zone", as_index=False)
+    gdf = gdf.dissolve(by="susceptibility_zone", as_index=False)
     gdf["area_km2"] = gdf.geometry.area / 1_000_000
     gdf.to_file(out_path, driver="GeoJSON")
     return gdf
