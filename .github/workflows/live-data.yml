@@ -1,0 +1,44 @@
+name: live data
+
+on:
+  workflow_dispatch:
+    inputs:
+      district:
+        description: Kerala district
+        default: Thiruvananthapuram
+  schedule:
+    - cron: "17 3 * * 1"
+  push:
+    branches: [open-data]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Build Kerala district boundaries
+        if: hashFiles('flood_tool/data/kerala_districts.geojson') == ''
+        run: python scripts/make_kerala_districts.py
+      - name: Fetch every layer and run the analysis
+        run: python scripts/check_sources.py --district "${{ inputs.district || 'Thiruvananthapuram' }}" --out-dir live_check 2>&1 | tee live_check.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-check
+          path: |
+            live_check
+            live_check.log
+            flood_tool/data/kerala_districts.geojson
